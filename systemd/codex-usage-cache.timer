@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh OpenClaw Codex usage cache every 5 minutes
+
+[Timer]
+OnStartupSec=1min
+OnUnitInactiveSec=5min
+AccuracySec=20s
+Unit=codex-usage-cache.service
+
+[Install]
+WantedBy=timers.target
