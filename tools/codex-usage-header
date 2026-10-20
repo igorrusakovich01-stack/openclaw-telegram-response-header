@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import re
+import subprocess
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+TZ_NAME = os.environ.get("OPENCLAW_USAGE_TIMEZONE", "UTC")
+TZ = ZoneInfo(TZ_NAME)
+WEEK_MS = 7 * 24 * 60 * 60 * 1000
+PROFILE_RE = re.compile(r"^openai:\S+$")
+
+
+def run_json(cmd, timeout=130):
+    p = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+    if p.returncode != 0:
+        raise RuntimeError(
+            p.stderr.strip()
+            or p.stdout.strip()
+            or f"command failed: {cmd}"
+        )
+
+    return json.loads(p.stdout)
+
+
+def resolve_agent():
+    explicit = os.environ.get("OPENCLAW_USAGE_AGENT")
+    if explicit:
+        return explicit
+
+    data = run_json(["openclaw", "agents", "list", "--json"], timeout=60)
+
+    if not isinstance(data, list):
+        raise RuntimeError("openclaw agents list did not return an array")
+
+    defaults = [a for a in data if a.get("isDefault") is True and a.get("id")]
+
+    if len(defaults) == 1:
+        return defaults[0]["id"]
+
+    if len(data) == 1 and data[0].get("id"):
+        return data[0]["id"]
+
+    raise RuntimeError(
+        "cannot determine agent automatically; set OPENCLAW_USAGE_AGENT"
+    )
+
+
+def find_openai_profiles(obj):
+    found = set()
+
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if k in ("id", "profileId", "profile_id") and isinstance(v, str):
+                    if PROFILE_RE.fullmatch(v):
+                        found.add(v)
+                walk(v)
+
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+        elif isinstance(x, str):
+            if PROFILE_RE.fullmatch(x):
+                found.add(x)
+
+    walk(obj)
+    return sorted(found)
+
+
+def get_profiles(agent):
+    data = run_json([
+        "openclaw",
+        "models",
+        "auth",
+        "list",
+        "--provider", "openai",
+        "--agent", agent,
+        "--json",
+    ])
+
+    # Current OpenClaw: retain a profile's real account email separately
+    # from its OAuth profile id/alias, e.g. openai:backup.
+    if isinstance(data, dict) and isinstance(data.get("profiles"), list):
+        profiles = {}
+        for profile in data["profiles"]:
+            if not isinstance(profile, dict):
+                continue
+            profile_id = profile.get("id")
+            provider = profile.get("provider")
+            if (
+                provider == "openai"
+                and isinstance(profile_id, str)
+                and profile_id.startswith("openai:")
+                and not any(ch.isspace() for ch in profile_id)
+            ):
+                email = profile.get("email")
+                if (
+                    isinstance(email, str)
+                    and "@" in email
+                    and len(email) <= 320
+                    and not any(ch.isspace() for ch in email)
+                ):
+                    profiles[profile_id] = email
+                else:
+                    profiles[profile_id] = None
+
+        if profiles:
+            return dict(sorted(profiles.items()))
+
+    # Compatibility fallback for older/different JSON shapes.
+    return {profile_id: None for profile_id in find_openai_profiles(data)}
+
+
+def get_usage(agent, profile_id):
+    data = run_json([
+        "openclaw",
+        "gateway",
+        "call",
+        "codex.accountUsage",
+        "--params",
+        json.dumps({
+            "agentId": agent,
+            "profileId": profile_id,
+        }),
+        "--json",
+        "--timeout", "120000",
+    ])
+
+    if isinstance(data, dict) and data.get("ok") is False:
+        err = data.get("error") or {}
+        raise RuntimeError(
+            err.get("message")
+            or err.get("code")
+            or "accountUsage unavailable"
+        )
+
+    provider = next(
+        p for p in data.get("providers", [])
+        if p.get("provider") == "openai"
+    )
+
+    week = next(
+        w for w in provider.get("windows", [])
+        if str(w.get("label", "")).lower() == "week"
+    )
+
+    used = max(0.0, min(100.0, float(week["usedPercent"])))
+    remaining = 100.0 - used
+
+    return {
+        "profileId": profile_id,
+        "plan": provider.get("plan"),
+        "usedPercent": used,
+        "remainingPercent": remaining,
+        "resetAt": int(week["resetAt"]),
+        "updatedAt": int(data["updatedAt"]),
+    }
+
+
+def make_bar(percent):
+    percent = max(0, min(100, percent))
+    filled = max(1, min(5, int(percent / 20 + 0.5)))
+
+    if percent > 30:
+        full = "🟩"
+    elif percent > 5:
+        full = "🟨"
+    else:
+        full = "🟥"
+
+    return full * filled + "⬜" * (5 - filled)
+
+
+def percent_label(rows, overall_percent):
+    """
+    Prefix with ≈ when any provider reports usedPercent == 0.
+    Provider percentages are coarse integers; zero can mean "less than 1% used".
+    """
+    approximate = any(float(r.get("usedPercent", -1)) == 0.0 for r in rows)
+    prefix = "≈" if approximate else ""
+    return f"{prefix}{overall_percent}%"
+
+
+def pace_state(rows, overall_percent):
+    if overall_percent <= 5:
+        return "🔴", None
+
+    now_ms = int(datetime.now(TZ).timestamp() * 1000)
+    planned = []
+
+    for row in rows:
+        reset_at = row.get("resetAt")
+        if not reset_at:
+            continue
+
+        remaining_ms = max(0, min(WEEK_MS, int(reset_at) - now_ms))
+        planned.append(remaining_ms / WEEK_MS * 100)
+
+    if not planned:
+        return "⚪", None
+
+    planned_percent = sum(planned) / len(planned)
+
+    if overall_percent >= planned_percent:
+        return "🟢", planned_percent
+
+    return "🟡", planned_percent
+
+
+result = {
+    "agentId": None,
+    "profiles": [],
+    "subscriptions": [],
+    "errors": [],
+    "complete": False,
+}
+
+try:
+    agent = resolve_agent()
+    result["agentId"] = agent
+except Exception as e:
+    agent = None
+    result["errors"].append({
+        "stage": "agent-discovery",
+        "error": str(e),
+    })
+
+if agent:
+    try:
+        profiles = get_profiles(agent)
+        result["profiles"] = list(profiles)
+    except Exception as e:
+        profiles = {}
+        result["errors"].append({
+            "stage": "auth-list",
+            "error": str(e),
+        })
+else:
+    profiles = {}
+
+for profile_id, email in profiles.items():
+    try:
+        subscription = get_usage(agent, profile_id)
+        if email:
+            subscription["email"] = email
+        result["subscriptions"].append(subscription)
+    except Exception as e:
+        result["errors"].append({
+            "profileId": profile_id,
+            "error": str(e),
+        })
+
+rows = result["subscriptions"]
+result["availableCount"] = len(rows)
+result["configuredCount"] = len(profiles)
+
+if len(rows) == 0:
+    result["reason"] = "no usable subscriptions"
+    result["header"] = "W:**?%** ⬜⬜⬜⬜⬜ ~? ⚪"
+
+elif len(rows) == 1:
+    overall = round(rows[0]["remainingPercent"])
+    overall = max(0, min(100, overall))
+
+    reset_at = rows[0]["resetAt"]
+    dt = datetime.fromtimestamp(reset_at / 1000, TZ)
+    pace, planned = pace_state(rows, overall)
+
+    result["complete"] = True
+    result["overallPercent"] = overall
+    result["earliestResetAt"] = reset_at
+    result["paceEmoji"] = pace
+    if planned is not None:
+        result["plannedRemainingPercent"] = round(planned, 1)
+
+    result["header"] = (
+        f"W:**{percent_label(rows, overall)}** {make_bar(overall)} "
+        f"~{dt:%d.%m %H:%M} {pace}"
+    )
+
+else:
+    plans = {r.get("plan") for r in rows}
+
+    if len(plans) == 1 and None not in plans:
+        overall = round(
+            sum(r["remainingPercent"] for r in rows) / len(rows)
+        )
+        overall = max(0, min(100, overall))
+
+        reset_at = min(r["resetAt"] for r in rows)
+        dt = datetime.fromtimestamp(reset_at / 1000, TZ)
+        pace, planned = pace_state(rows, overall)
+
+        result["complete"] = True
+        result["overallPercent"] = overall
+        result["earliestResetAt"] = reset_at
+        result["paceEmoji"] = pace
+        if planned is not None:
+            result["plannedRemainingPercent"] = round(planned, 1)
+
+        result["header"] = (
+            f"W:**{percent_label(rows, overall)}** {make_bar(overall)} "
+            f"~{dt:%d.%m %H:%M} {pace}"
+        )
+    else:
+        result["reason"] = (
+            "usable subscriptions have different plans; "
+            "absolute limits unavailable"
+        )
+        result["header"] = "W:**?%** ⬜⬜⬜⬜⬜ ~? ⚪"
+
+print(json.dumps(result, ensure_ascii=False, indent=2))
