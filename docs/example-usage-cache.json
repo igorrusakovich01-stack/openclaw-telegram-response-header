@@ -1,0 +1,28 @@
+{
+  "cacheGeneratedAt": 1792510000000,
+  "complete": true,
+  "availableCount": 2,
+  "configuredCount": 2,
+  "overallPercent": 67,
+  "plannedRemainingPercent": 61,
+  "paceEmoji": "🟢",
+  "earliestResetAt": 1792914000000,
+  "header": "W:**67%** 🟩🟩🟩⬜⬜ ~27.10 18:00 🟢",
+  "subscriptions": [
+    {
+      "profileId": "openai:sample-one",
+      "plan": "pro",
+      "usedPercent": 26,
+      "remainingPercent": 74,
+      "resetAt": 1792914000000
+    },
+    {
+      "profileId": "openai:sample-two",
+      "plan": "pro",
+      "usedPercent": 40,
+      "remainingPercent": 60,
+      "resetAt": 1793000400000
+    }
+  ],
+  "errors": []
+}
