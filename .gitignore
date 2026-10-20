@@ -1,0 +1,21 @@
+# Credentials and per-host data must never be committed.
+.openclaw/
+.env
+.env.*
+!.env.example
+**/auth-profiles.json
+**/codex-usage-current.json
+**/.telegram-response-header-media/
+**/.bob-limits-media/
+**/backups/
+**/Backups/
+**/*.pem
+**/*.key
+**/*.p12
+node_modules/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.log
+*.tmp
+*.bak
