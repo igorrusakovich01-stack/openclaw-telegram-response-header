@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WORKSPACE="${OPENCLAW_USAGE_WORKSPACE:-$HOME/.openclaw/workspace}"
+HELPER="$WORKSPACE/tools/codex-usage-header"
+OUT="$WORKSPACE/codex-usage-current.json"
+
+TMP="$(mktemp "$WORKSPACE/.codex-usage-current.json.XXXXXX")"
+
+cleanup() {
+    rm -f "$TMP"
+}
+trap cleanup EXIT
+
+"$HELPER" | python3 -c '
+import sys, json, time
+from datetime import datetime
+
+d = json.load(sys.stdin)
+d["cacheGeneratedAt"] = int(time.time() * 1000)
+d["cacheGeneratedAtIso"] = (
+    datetime.now()
+    .astimezone()
+    .isoformat(timespec="seconds")
+)
+
+json.dump(d, sys.stdout, ensure_ascii=False, indent=2)
+print()
+' > "$TMP"
+
+python3 - "$TMP" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+if not isinstance(data.get("header"), str):
+    raise SystemExit("ERROR: generated JSON has no header")
+
+if not isinstance(data.get("subscriptions"), list):
+    raise SystemExit("ERROR: invalid subscriptions array")
+
+if not isinstance(data.get("availableCount"), int):
+    raise SystemExit("ERROR: invalid availableCount")
+PY
+
+chmod 600 "$TMP"
+mv -f "$TMP" "$OUT"
+
+trap - EXIT
