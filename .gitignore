@@ -6,7 +6,6 @@
 **/auth-profiles.json
 **/codex-usage-current.json
 **/.telegram-response-header-media/
-**/.bob-limits-media/
 **/backups/
 **/Backups/
 **/*.pem
