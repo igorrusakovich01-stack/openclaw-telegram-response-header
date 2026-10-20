@@ -10,7 +10,9 @@
 
 **Telegram response header**
 
-![Illustrative Telegram response displaying cached W quota and observed M model](docs/images/telegram-header-demo.svg)
+![Annotated Telegram header showing quota, progress bar, reset time, usage pace, model, and legacy update marker](docs/images/telegram-header-annotated.svg)
+
+> Annotated example with synthetic data. The `upd` field belongs to a legacy header format and is **not emitted by the current public release**.
 
 **Private `/limits` report**
 
