@@ -1,0 +1,35 @@
+{
+  "id": "telegram-response-header",
+  "name": "Telegram Response Header",
+  "description": "Cached OpenAI usage, actual model labels, and private Telegram /limits reports.",
+  "version": "1.0.0",
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": [
+      "hook"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "ownerTelegramId": {
+        "type": "string",
+        "pattern": "^[0-9]+$",
+        "description": "Numeric Telegram user ID authorized to view /limits in its private chat; never commit the value."
+      },
+      "reportTitle": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "description": "Optional English report title (default: OpenAI Usage Limits)."
+      },
+      "timeZone": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "description": "IANA time zone for the usage report (defaults to UTC)."
+      }
+    }
+  }
+}
