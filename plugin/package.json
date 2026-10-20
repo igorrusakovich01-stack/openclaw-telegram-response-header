@@ -1,0 +1,17 @@
+{
+  "name": "@local/openclaw-telegram-response-header",
+  "version": "1.0.0",
+  "type": "module",
+  "peerDependencies": {
+    "openclaw": ">=2026.10.4"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.10.4",
+      "minGatewayVersion": "2026.10.4"
+    }
+  }
+}
