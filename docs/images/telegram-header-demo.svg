@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" role="img" aria-labelledby="title desc">
+<title id="title">Example OpenClaw Telegram response with W and M header</title>
+<desc id="desc">Illustrative synthetic-data demo of a Telegram response showing weekly quota and actual model.</desc>
+<rect width="1200" height="640" fill="#e9f1f7"/>
+<rect x="85" y="55" width="1030" height="530" rx="20" fill="#fff" stroke="#d5e4ed" stroke-width="2"/>
+<path d="M105 55H1095Q1115 55 1115 75V131H85V75Q85 55 105 55Z" fill="#f8fbfd"/>
+<circle cx="138" cy="94" r="25" fill="#229ed9"/>
+<text x="138" y="103" text-anchor="middle" font-family="Arial,sans-serif" font-size="26" font-weight="bold" fill="#fff">O</text>
+<text x="180" y="93" font-family="Arial,sans-serif" font-size="21" font-weight="700" fill="#183b52">OpenClaw Bot</text>
+<text x="180" y="116" font-family="Arial,sans-serif" font-size="15" fill="#628196">Telegram response preview</text>
+<rect x="530" y="160" width="515" height="74" rx="16" fill="#dff6e7"/>
+<text x="556" y="193" font-family="Arial,sans-serif" font-size="20" fill="#193e37">Which model answered my message?</text>
+<text x="1000" y="218" text-anchor="end" font-family="Arial,sans-serif" font-size="12" fill="#5b8a74">09:40</text>
+<rect x="145" y="260" width="740" height="230" rx="18" fill="#fafcfe" stroke="#dce6ee" stroke-width="2"/>
+<text x="171" y="293" font-family="monospace" font-size="23" font-weight="bold" fill="#193e53">W: 67%</text>
+<g transform="translate(305 270)">
+<rect width="48" height="28" rx="5" fill="#24ae71"/>
+<rect x="55" width="48" height="28" rx="5" fill="#24ae71"/>
+<rect x="110" width="48" height="28" rx="5" fill="#24ae71"/>
+<rect x="165" width="48" height="28" rx="5" fill="#d6dde4"/>
+<rect x="220" width="48" height="28" rx="5" fill="#d6dde4"/>
+</g>
+<text x="601" y="290" font-family="Arial,sans-serif" font-size="20" fill="#5b7180">Reset: Oct 27</text>
+<circle cx="813" cy="285" r="10" fill="#24ae71"/>
+<text x="171" y="335" font-family="monospace" font-size="23" font-weight="bold" fill="#193e53">M: openai/gpt-6.1-sol</text>
+<path d="M172 352H853" stroke="#e0e8ef" stroke-width="2"/>
+<text x="171" y="396" font-family="Arial,sans-serif" font-size="22" fill="#1d3546">This response was generated with</text>
+<text x="171" y="433" font-family="Arial,sans-serif" font-size="22" fill="#1d3546">openai/gpt-6.1-sol.</text>
+<text x="834" y="467" text-anchor="end" font-family="Arial,sans-serif" font-size="13" fill="#8194a2">09:40</text>
+<text x="600" y="548" font-family="Arial,sans-serif" font-size="17" text-anchor="middle" fill="#6b8495">ILLUSTRATIVE DEMO • SYNTHETIC USAGE DATA</text>
+</svg>
