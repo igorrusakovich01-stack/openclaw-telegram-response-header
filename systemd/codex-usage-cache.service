@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh OpenClaw Codex usage cache
+After=openclaw-gateway.service
+
+[Service]
+Type=oneshot
+Environment=PATH=__OPENCLAW_BIN_DIR__:__NODE_BIN_DIR__:/usr/local/bin:/usr/bin:/bin
+Environment=OPENCLAW_USAGE_AGENT=__AGENT_ID__
+Environment=OPENCLAW_USAGE_TIMEZONE=__TIMEZONE__
+ExecStart=%h/.openclaw/workspace/tools/codex-usage-cache-update
+TimeoutStartSec=300
+Nice=10
