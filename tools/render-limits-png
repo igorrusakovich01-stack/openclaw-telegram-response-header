@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Render the deterministic OpenAI usage cache into a Telegram-ready PNG.
+
+Usage: render-limits-png SOURCE_JSON OUTPUT_PNG [REPORT_TITLE] [TIME_ZONE]
+No network, no LLM, no browser. Requires python3-pil (Pillow).
+"""
+import json
+import math
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    raise SystemExit("Pillow missing: sudo apt install python3-pil")
+
+WIDTH = 1120
+TZ = ZoneInfo("UTC")
+WEEK_MS = 7 * 24 * 60 * 60 * 1000
+NAVY = "#173046"
+MUTED = "#61778b"
+PALE = "#e9eff4"
+WHITE = "#ffffff"
+GREEN = "#14aa65"
+YELLOW = "#edb23d"
+RED = "#d76962"
+BG = "#eff8f5"
+
+FONT_REGULAR_CANDIDATES = [
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+]
+FONT_BOLD_CANDIDATES = [
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+]
+
+
+def font(size, bold=False):
+    candidates = FONT_BOLD_CANDIDATES if bold else FONT_REGULAR_CANDIDATES
+    for file in candidates:
+        if Path(file).is_file():
+            return ImageFont.truetype(file, size)
+    raise RuntimeError("Cannot find TrueType fonts (install fonts-dejavu-core)")
+
+
+def num(value):
+    try:
+        v = float(value)
+        return v if math.isfinite(v) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def fmt_pct(value, digits=1):
+    v = num(value)
+    if v is None:
+        return "?"
+    return (f"{v:.{digits}f}".rstrip("0").rstrip(".") if digits > 0 else f"{v:.0f}") + "%"
+
+
+def fmt_time(value):
+    v = num(value)
+    if v is None or v <= 0:
+        return "unknown"
+    return datetime.fromtimestamp(v / 1000, TZ).strftime("%d.%m %H:%M")
+
+
+def rectangle(draw, coords, radius, fill, outline=None, width=1):
+    draw.rounded_rectangle(coords, radius, fill=fill, outline=outline, width=width)
+
+
+def text(draw, xy, value, size, color=NAVY, bold=False, anchor=None):
+    draw.text(xy, str(value), font=font(size, bold), fill=color, anchor=anchor)
+
+
+def fit_text(draw, value, max_width, size, min_size=23, bold=False):
+    raw = str(value)
+    while size > min_size and draw.textbbox((0, 0), raw, font=font(size, bold))[2] > max_width:
+        size -= 1
+    if draw.textbbox((0, 0), raw, font=font(size, bold))[2] <= max_width:
+        return raw, size
+    while raw and draw.textbbox((0, 0), raw + "…", font=font(size, bold))[2] > max_width:
+        raw = raw[:-1]
+    return raw + "…", size
+
+
+def bar(draw, x, y, width, height, value, color):
+    rectangle(draw, (x, y, x + width, y + height), height // 2, "#e4ecf1")
+    pct = num(value)
+    if pct is None:
+        return
+    fill_width = int(width * max(0, min(100, pct)) / 100)
+    if fill_width:
+        rectangle(draw, (x, y, x + max(height, fill_width), y + height), height // 2, color)
+
+
+def status(remaining, planned):
+    if remaining is None or planned is None:
+        return "No data", MUTED
+    if remaining <= 5:
+        return "Critically low", RED
+    return ("Usage above pace", YELLOW) if remaining < planned else ("Usage on pace", GREEN)
+
+
+def draw_account(draw, x, y, w, h, row, index, now):
+    rectangle(draw, (x, y + 5, x + w, y + h + 5), 30, "#dae8e6")
+    rectangle(draw, (x, y, x + w, y + h), 30, WHITE, "#e3edf0", 2)
+    profile = row.get("profileId") or f"Profile {index + 1}"
+    email = row.get("email")
+    email = email if isinstance(email, str) and "@" in email else None
+    display_name = email or profile
+    plan = str(row.get("plan") or "?")
+    rem = num(row.get("remainingPercent"))
+    used = num(row.get("usedPercent"))
+    reset = num(row.get("resetAt"))
+    planned = None if reset is None else min(100, max(0, (reset - now) / WEEK_MS * 100))
+    state, state_color = status(rem, planned)
+
+    chip_x = x + 32
+    rectangle(draw, (chip_x, y + 28, chip_x + 54, y + 82), 14, "#e6f6ee")
+    text(draw, (chip_x + 27, y + 55), str(index + 1), 27, GREEN, True, "mm")
+
+    profile_label, sz = fit_text(draw, display_name, w - 390, 31, 23, True)
+    text(draw, (x + 103, y + 36), profile_label, sz, NAVY, True)
+    # Keep OAuth alias solely in internal cache/failover config.
+    text(draw, (x + 103, y + 77), f"Plan: {plan}", 24, MUTED)
+
+    rectangle(draw, (x + w - 305, y + 36, x + w - 32, y + 82), 22, "#f2f6f7")
+    draw.ellipse((x + w - 285, y + 50, x + w - 263, y + 72), fill=state_color)
+    label, sz = fit_text(draw, state, 230, 19, 16, True)
+    text(draw, (x + w - 248, y + 48), label, sz, NAVY, True)
+
+    text(draw, (x + 36, y + 120), "Remaining", 25, MUTED)
+    text(draw, (x + w - 35, y + 120), fmt_pct(rem), 32, NAVY, True, "ra")
+    color = YELLOW if rem is not None and planned is not None and rem < planned else GREEN
+    bar(draw, x + 36, y + 167, w - 72, 22, rem, color)
+
+    text(draw, (x + 36, y + 215), "Planned remaining", 25, MUTED)
+    text(draw, (x + w - 35, y + 215), fmt_pct(planned), 30, NAVY, True, "ra")
+    bar(draw, x + 36, y + 259, w - 72, 16, planned, "#9cb6c5")
+
+    text(draw, (x + 36, y + 294), f"Used: {fmt_pct(used)}", 23, NAVY)
+    text(draw, (x + w - 36, y + 294), f"Reset: {fmt_time(reset)}", 23, MUTED, False, "ra")
+
+
+def main():
+    if len(sys.argv) not in (3, 4, 5):
+        raise SystemExit("usage: render-limits-png SOURCE_JSON OUTPUT_PNG [REPORT_TITLE] [TIME_ZONE]")
+    source, target = map(Path, sys.argv[1:3])
+    report_title = sys.argv[3].strip()[:64] if len(sys.argv) == 4 else "OpenAI Usage Limits"
+    report_title = report_title or "OpenAI Usage Limits"
+    global TZ
+    if len(sys.argv) == 5:
+        try:
+            TZ = ZoneInfo(sys.argv[4])
+        except (KeyError, ValueError):
+            TZ = ZoneInfo("UTC")
+    data = json.loads(source.read_text("utf-8"))
+    rows = data.get("subscriptions") if isinstance(data.get("subscriptions"), list) else []
+    errors = data.get("errors") if isinstance(data.get("errors"), list) else []
+    now = int(datetime.now(TZ).timestamp() * 1000)
+    gen = num(data.get("cacheGeneratedAt"))
+    fresh = gen is not None and -60000 <= now - gen <= 600000
+    n = min(len(rows), 8)
+    account_height = 346
+    account_gap = 24
+    height = 570 + n * (account_height + account_gap) + 235
+    if len(rows) > n:
+        height += 48
+
+    img = Image.new("RGB", (WIDTH, height), BG)
+    draw = ImageDraw.Draw(img)
+    # restrained background decoration
+    draw.ellipse((-250, -240, 450, 460), fill="#e0f3ee")
+    draw.ellipse((WIDTH - 310, height - 280, WIDTH + 190, height + 200), fill="#dceff0")
+
+    rectangle(draw, (36, 35, WIDTH - 36, height - 36), 44, "#d9e8e4")
+    rectangle(draw, (32, 30, WIDTH - 40, height - 42), 44, WHITE)
+    x, w = 68, WIDTH - 144
+
+    rectangle(draw, (x, 64, x + 72, 136), 20, "#e2f7ed")
+    # built-in bar-chart mark (no emoji glyph dependency)
+    for i, (hh, color) in enumerate(((26, YELLOW), (42, GREEN), (55, "#3d98d4"))):
+        rectangle(draw, (x + 16 + i * 17, 124 - hh, x + 27 + i * 17, 124), 3, color)
+    title, title_size = fit_text(draw, report_title, 650, 43, 25, True)
+    text(draw, (x + 94, 63), title, title_size, NAVY, True)
+    text(draw, (x + 96, 115), "OpenAI · Weekly limits", 25, MUTED)
+    text(draw, (x + w, 94), f"Snapshot: {fmt_time(gen)}", 23, MUTED, False, "ra")
+
+    sum_y = 177
+    rectangle(draw, (x, sum_y, x + w, sum_y + 350), 28, "#edf9f3", "#d6efdf", 2)
+    text(draw, (x + 28, sum_y + 25), "Overall remaining", 29, NAVY, True)
+
+    overall = num(data.get("overallPercent")) if data.get("complete") is True else None
+    text(draw, (x + 28, sum_y + 84), fmt_pct(overall, 0), 87, GREEN if overall is not None else MUTED, True)
+    text(draw, (x + 340, sum_y + 98), "2 subscriptions" if len(rows) == 2 else f"subscriptions: {len(rows)}", 25, MUTED)
+
+    bar(draw, x + 28, sum_y + 201, w - 56, 29, overall, GREEN)
+    planned = num(data.get("plannedRemainingPercent"))
+    text(draw, (x + 28, sum_y + 247), f"On-pace target: {fmt_pct(planned)}", 26, NAVY)
+    pace_text, pace_color = status(overall, planned)
+    rectangle(draw, (x + w - 335, sum_y + 251, x + w - 28, sum_y + 304), 24, WHITE)
+    draw.ellipse((x + w - 314, sum_y + 269, x + w - 289, sum_y + 294), fill=pace_color)
+    text(draw, (x + w - 274, sum_y + 267), pace_text, 22, NAVY, True)
+
+    if not fresh:
+        rectangle(draw, (x + 25, sum_y + 305, x + w - 25, sum_y + 343), 15, "#fff0d4")
+        text(draw, (x + 40, sum_y + 309), "WARNING: Usage cache is stale", 22, "#975422", True)
+
+    y = 551
+    for i, row in enumerate(rows[:n]):
+        draw_account(draw, x, y, w, account_height, row, i, now)
+        y += account_height + account_gap
+
+    if len(rows) > n:
+        text(draw, (x + 22, y + 6), f"Additional subscriptions: {len(rows) - n}", 25, MUTED)
+        y += 48
+
+    rectangle(draw, (x, y + 2, x + w, y + 186), 24, "#edf4f8")
+    text(draw, (x + 25, y + 19), "Next reset", 26, NAVY, True)
+    text(draw, (x + w - 26, y + 19), fmt_time(data.get("earliestResetAt")), 27, NAVY, True, "ra")
+    text(draw, (x + 25, y + 66), f"Available subscriptions: {data.get('availableCount', len(rows))}", 23, MUTED)
+    text(draw, (x + 25, y + 106), f"Unavailable profiles: {len(errors)}", 23, MUTED)
+    if errors:
+        ids = ", ".join(str(e.get("profileId") or e.get("stage") or "?") for e in errors)
+        safe_label, size = fit_text(draw, ids, w - 390, 22, 17)
+        text(draw, (x + 315, y + 110), safe_label, size, MUTED)
+    text(draw, (x + 25, y + 151), "Source: codex.accountUsage · no LLM calls", 19, MUTED)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    img.save(tmp, "PNG", optimize=True)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, target)
+
+
+if __name__ == "__main__":
+    main()
