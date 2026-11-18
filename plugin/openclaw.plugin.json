@@ -1,8 +1,8 @@
 {
   "id": "telegram-response-header",
   "name": "Telegram Response Header",
-  "description": "Cached OpenAI usage, actual model labels, and private Telegram /limits reports.",
-  "version": "1.0.0",
+  "description": "Owner-only OpenAI quota indicators, model labels, and private /limits reports.",
+  "version": "1.0.1",
   "activation": {
     "onStartup": true,
     "onCapabilities": [
