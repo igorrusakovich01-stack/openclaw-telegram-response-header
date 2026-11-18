@@ -29,6 +29,17 @@ test("owner and other user in the same topic remain separate", () => {
   assert.equal(tracker.isOwnerReply({}, { sessionKey: SESSION }, OWNER), false);
 });
 
+test("a numeric channelId may identify the chat, not the provider", () => {
+  const tracker = createReplyAudienceTracker();
+  const sample = inbound(OWNER, "numeric-channel-run", "701");
+  tracker.remember(sample.event, { ...sample.ctx, channelId: "-100123" });
+  assert.equal(tracker.isOwnerReply(
+    { runId: "numeric-channel-run" },
+    { runId: "numeric-channel-run", sessionKey: SESSION },
+    OWNER,
+  ), true);
+});
+
 test("an exact inbound message ID can correlate when run ID is absent", () => {
   const tracker = createReplyAudienceTracker();
   const a = inbound(OWNER, null, "201");
