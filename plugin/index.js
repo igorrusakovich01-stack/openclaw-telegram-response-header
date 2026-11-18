@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createReplyAudienceTracker,
+  stripAnswerHeader,
+  compactModelLine,
+} from "./reply-audience.mjs";
 
 const CACHE_FILE = path.join(
   os.homedir(),
@@ -374,6 +379,12 @@ export default definePluginEntry({
   description: "Adds deterministic W/M headers to final Telegram agent replies.",
 
   register(api) {
+    // Metadata-only correlation; never infer the sender from the last
+    // message in a shared Telegram group or topic.
+    const replyAudience = createReplyAudienceTracker();
+    api.on("message_received", (event, ctx) => replyAudience.remember(event, ctx));
+    api.on("before_dispatch", (event, ctx) => replyAudience.remember(event, ctx));
+
     api.registerCommand({
       name: "limits",
       description: "OpenAI usage limits and subscriptions",
@@ -436,11 +447,17 @@ export default definePluginEntry({
       const channel = ctx?.channelId ?? event.metadata?.channel;
       if (channel !== "telegram" || typeof event.content !== "string") return;
       const content = event.content;
-      if (!content.trim() || alreadyHasUsageHeader(content)) return;
+      if (!content.trim()) return;
+      // Owner-authorized /limits reports manage their own full header.
+      if (/^\s*W:[^\n]*\nM:[^\n]*\n\n📊/u.test(content)) return;
       // Provider status/fallback notices are not model-generated answers.
       if (/^\s*↪️\s*Model Fallback/u.test(content)) return;
-      const model = resolveSessionModel(ctx, event);
-      return { content: `${await readUsageHeader()}\nM:**${model}**\n\n${stripOldHeader(content).trimStart()}` };
+      const owner = replyAudience.isOwnerReply(event, ctx, api.pluginConfig?.ownerTelegramId);
+      if (owner && alreadyHasUsageHeader(content)) return;
+      const observed = resolveSessionModel(ctx, event);
+      const modelHeader = observed !== "?" ? `M:**${observed}**` : compactModelLine(content);
+      const header = owner ? `${await readUsageHeader()}\n${modelHeader}` : modelHeader;
+      return { content: `${header}\n\n${stripAnswerHeader(content).trimStart()}` };
     });
 
     // The first streamed Telegram block may be delivered before the
@@ -520,11 +537,13 @@ export default definePluginEntry({
         return;
       }
 
-      const usageHeader = await readUsageHeader();
+      const owner = replyAudience.isOwnerReply(event, ctx, api.pluginConfig?.ownerTelegramId);
       const model = resolveActualModel(event, runId);
-      const modelHeader = `M:**${model}**`;
+      const modelHeader = model !== "?" ? `M:**${model}**`
+        : compactModelLine(event.payload.text);
+      const header = owner ? `${await readUsageHeader()}\n${modelHeader}` : modelHeader;
 
-      const body = stripOldHeader(event.payload.text).trimStart();
+      const body = stripAnswerHeader(event.payload.text).trimStart();
 
       // Dedupe only when correlation is known. Do not memoize a
       // session key as a run id: it would suppress future replies.
@@ -535,7 +554,7 @@ export default definePluginEntry({
       return {
         payload: {
           ...event.payload,
-          text: `${usageHeader}\n${modelHeader}\n\n${body}`,
+          text: `${header}\n\n${body}`,
         },
       };
     });
