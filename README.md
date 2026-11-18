@@ -22,7 +22,7 @@
 
 ## Features
 
-- **W:** cached OpenAI weekly quota remaining, five-segment progress bar, next reset, and pace indicator.
+- **W:** cached OpenAI weekly quota remaining, five-segment progress bar, next reset, and pace indicator, visible only on replies to the configured owner.
 - **M:** observed model identifier, including model changes when the correlated runtime events are available. Unknown model data is displayed as `M:?`, never invented.
 - **`/limits`:** owner-only private Telegram command for a per-subscription PNG usage report, with text fallback. It does not invoke an LLM.
 - **Multiple OpenAI OAuth profiles:** reads available profiles and shows each subscription; combines percentages only when provider plan information is comparable.
@@ -38,7 +38,7 @@ M:**openai/gpt-6.1-sol**
 Your bot's normal response...
 ```
 
-The example figures above are synthetic.
+The example figures above are synthetic. **Replies to other users display only the M line.** If a reply cannot be safely attributed to the owner, the quota indicator is omitted. This applies across direct chats, groups and topics; private `/limits` reports are unchanged.
 
 ## Requirements
 
@@ -104,7 +104,7 @@ See [Configuration](docs/configuration.md) and [Security and privacy](SECURITY.m
 2. It requests each profile's `codex.accountUsage` data through the local Gateway.
 3. `tools/codex-usage-cache-update` atomically writes the usage JSON cache with restricted filesystem permissions.
 4. A systemd user timer refreshes the cache every five minutes.
-5. The plugin prepends the cached W line to eligible Telegram replies and correlates M with available model lifecycle events.
+5. The plugin prepends W only when the originating sender is verified as the configured owner. All other Telegram replies receive only the model line; M is correlated with available model lifecycle events.
 6. The owner-only `/limits` command renders a fresh PNG locally using Python/Pillow, or returns text if image delivery fails.
 
 No external metrics server, third-party telemetry, or LLM call is required for generating the usage header and `/limits` image.
