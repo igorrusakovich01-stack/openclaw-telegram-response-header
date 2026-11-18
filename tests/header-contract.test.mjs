@@ -28,7 +28,15 @@ test("both Telegram reply paths and observed model hooks exist", () => {
     "model_call_started", "model_call_ended"
   ]) assert.ok(plugin.includes(`api.on("${name}"`), `Missing ${name}`);
   assert.match(plugin, /alreadyHasUsageHeader\(content\)/);
-  assert.match(plugin, /const model = resolveSessionModel\(ctx, event\)/);
+  assert.match(plugin, /const observed = resolveSessionModel\(ctx, event\)/);
+  assert.match(plugin, /const replyAudience = createReplyAudienceTracker\(\)/);
+  assert.equal(
+    (plugin.match(/replyAudience\.isOwnerReply\(event, ctx, api\.pluginConfig\?\.ownerTelegramId\)/g) ?? []).length,
+    2,
+    "Both outbound paths must enforce owner-only quota visibility",
+  );
+  assert.match(plugin, /stripAnswerHeader\(content\)/);
+  assert.match(plugin, /stripAnswerHeader\(event\.payload\.text\)/);
 });
 
 test("public code does not contain private environment labels", () => {
