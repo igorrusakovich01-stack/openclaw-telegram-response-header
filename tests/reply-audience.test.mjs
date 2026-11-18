@@ -46,6 +46,27 @@ test("sender mismatch, session mismatch and missing ID all fail closed", () => {
   assert.equal(tracker.isOwnerReply({}, {}, null), false);
 });
 
+test("outbound sender evidence cannot disagree between event and context", () => {
+  const tracker = createReplyAudienceTracker();
+  const a = inbound(OWNER, "owner-run-conflict", "601");
+  tracker.remember(a.event, a.ctx);
+  assert.equal(tracker.isOwnerReply(
+    { senderId: OTHER, runId: "owner-run-conflict" },
+    { senderId: OWNER, runId: "owner-run-conflict", sessionKey: SESSION },
+    OWNER,
+  ), false);
+  assert.equal(tracker.isOwnerReply(
+    { senderId: OTHER, runId: "owner-run-conflict" },
+    { runId: "owner-run-conflict", sessionKey: SESSION },
+    OWNER,
+  ), false);
+  assert.equal(tracker.isOwnerReply(
+    { senderId: OWNER, runId: "owner-run-conflict" },
+    { runId: "owner-run-conflict", sessionKey: SESSION },
+    OWNER,
+  ), true);
+});
+
 test("expired correlations cannot authorize an indicator", () => {
   let clock = 100;
   const tracker = createReplyAudienceTracker({ now: () => clock, ttlMs: 1000 });
