@@ -448,11 +448,14 @@ export default definePluginEntry({
       if (channel !== "telegram" || typeof event.content !== "string") return;
       const content = event.content;
       if (!content.trim()) return;
-      // Owner-authorized /limits reports manage their own full header.
-      if (/^\s*W:[^\n]*\nM:[^\n]*\n\n📊/u.test(content)) return;
+      const owner = replyAudience.isOwnerReply(event, ctx, api.pluginConfig?.ownerTelegramId);
+      const authenticatedOwnerCommand = Boolean(ctx) &&
+        isDirectOwnerCommand(ctx, String(api.pluginConfig?.ownerTelegramId ?? "").trim());
+      // A report-shaped body alone is not proof of authorization.
+      if ((owner || authenticatedOwnerCommand) &&
+        /^\s*W:[^\n]*\nM:[^\n]*\n\n📊/u.test(content)) return;
       // Provider status/fallback notices are not model-generated answers.
       if (/^\s*↪️\s*Model Fallback/u.test(content)) return;
-      const owner = replyAudience.isOwnerReply(event, ctx, api.pluginConfig?.ownerTelegramId);
       if (owner && alreadyHasUsageHeader(content)) return;
       const observed = resolveSessionModel(ctx, event);
       const modelHeader = observed !== "?" ? `M:**${observed}**` : compactModelLine(content);
@@ -522,9 +525,13 @@ export default definePluginEntry({
         return;
       }
 
-      // This command produces its own truthful header without invoking an LLM.
-      // Do not replace M:— with a fabricated model label.
-      if (/^W:[^\n]*\nM:[^\n]*\n\n📊 /u.test(event.payload.text)) {
+      const owner = replyAudience.isOwnerReply(event, ctx, api.pluginConfig?.ownerTelegramId);
+      const authenticatedOwnerCommand = Boolean(ctx) &&
+        isDirectOwnerCommand(ctx, String(api.pluginConfig?.ownerTelegramId ?? "").trim());
+      // Only an authenticated owner command may retain its own W/M header.
+      // A report-shaped body without owner evidence must be sanitized.
+      if ((owner || authenticatedOwnerCommand) &&
+        /^W:[^\n]*\nM:[^\n]*\n\n📊 /u.test(event.payload.text)) {
         return;
       }
 
@@ -537,7 +544,6 @@ export default definePluginEntry({
         return;
       }
 
-      const owner = replyAudience.isOwnerReply(event, ctx, api.pluginConfig?.ownerTelegramId);
       const model = resolveActualModel(event, runId);
       const modelHeader = model !== "?" ? `M:**${model}**`
         : compactModelLine(event.payload.text);
