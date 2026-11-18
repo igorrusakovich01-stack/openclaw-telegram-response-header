@@ -24,7 +24,8 @@ export function createReplyAudienceTracker({
   }
 
   function remember(event, ctx) {
-    if ((ctx?.channelId ?? event?.channel ?? event?.metadata?.channel) !== "telegram") return;
+    // Prefer the typed event channel: channelId may be a numeric chat target.
+    if ((event?.channel ?? ctx?.channel ?? event?.metadata?.channel ?? ctx?.channelId) !== "telegram") return;
     const fromContext = telegramId(ctx?.senderId);
     const fromEvent = telegramId(event?.senderId);
     if (fromContext && fromEvent && fromContext !== fromEvent) return;
