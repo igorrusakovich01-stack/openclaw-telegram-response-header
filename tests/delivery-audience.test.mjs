@@ -1,0 +1,135 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import os from "node:os";
+import vm from "node:vm";
+import { promisify } from "node:util";
+import {
+  createReplyAudienceTracker,
+  stripAnswerHeader,
+  compactModelLine,
+} from "../plugin/reply-audience.mjs";
+
+const OWNER = "111111111";
+const OTHER = "222222222";
+const SESSION = "agent:main:telegram:group:-100123:topic:17";
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const source = readFileSync(path.join(root, "plugin/index.js"), "utf8");
+
+function harness() {
+  // Evaluate the real plugin body against a minimal OpenClaw event mock.
+  // Never connect to a real Gateway, Telegram, files or OAuth profiles.
+  const body = source.slice(source.indexOf("const CACHE_FILE = path.join("))
+    .replace("export default definePluginEntry(", "globalThis.pluginEntry = definePluginEntry(");
+  const fakeCache = JSON.stringify({
+    complete: true,
+    header: "W:**73%** [synthetic]",
+    cacheGeneratedAt: Date.now(),
+  });
+  const context = {
+    process: { env: {} },
+    os,
+    path,
+    promisify,
+    execFile: (_file, _args, _opts, callback) => callback(null, "", ""),
+    randomUUID: () => "synthetic",
+    readFile: async () => fakeCache,
+    mkdir: async () => {},
+    readdir: async () => [],
+    stat: async () => ({ mtimeMs: Date.now() }),
+    unlink: async () => {},
+    definePluginEntry: (entry) => entry,
+    createReplyAudienceTracker,
+    stripAnswerHeader,
+    compactModelLine,
+    Date,
+    Intl,
+  };
+  vm.runInNewContext(body, context, { timeout: 2000 });
+  const hooks = new Map();
+  const api = {
+    pluginConfig: { ownerTelegramId: OWNER },
+    on(name, fn) {
+      assert.equal(hooks.has(name), false, "Duplicate hook: " + name);
+      hooks.set(name, fn);
+    },
+    registerCommand() {},
+  };
+  context.pluginEntry.register(api);
+  return {
+    api,
+    on: (name, event, ctx) => {
+      assert.ok(hooks.has(name), "Missing hook: " + name);
+      return hooks.get(name)(event, ctx);
+    },
+  };
+}
+
+function input(sender, id, sessionKey = SESSION) {
+  return {
+    event: { channel: "telegram", senderId: sender, runId: id, messageId: id + "-msg" },
+    ctx: { channelId: "telegram", senderId: sender, runId: id, messageId: id + "-msg", sessionKey },
+  };
+}
+
+async function incoming(h, sender, id) {
+  const { event, ctx } = input(sender, id);
+  await h.on("message_received", event, ctx);
+}
+
+test("reply_payload_sending: owner has W/M, other has M only", async () => {
+  const h = harness();
+  await incoming(h, OWNER, "r-owner");
+  await incoming(h, OTHER, "r-other");
+  const event = (runId) => ({
+    kind: "final",
+    channel: "telegram",
+    runId,
+    usageState: { resolvedRef: "openai/demo-model" },
+    payload: { text: "Answer" },
+  });
+  const owner = await h.on("reply_payload_sending", event("r-owner"), {
+    channelId: "telegram", runId: "r-owner", sessionKey: SESSION,
+  });
+  const other = await h.on("reply_payload_sending", event("r-other"), {
+    channelId: "telegram", runId: "r-other", sessionKey: SESSION,
+  });
+  assert.match(owner.payload.text, /^W:\*\*73%\*\*.*\nM:\*\*openai\/demo-model\*\*/);
+  assert.match(other.payload.text, /^M:\*\*openai\/demo-model\*\*/);
+  assert.doesNotMatch(other.payload.text, /W:/);
+});
+
+test("message_sending: owner has W/M, other M-only, unknown strips old W", async () => {
+  const h = harness();
+  await incoming(h, OWNER, "a-owner");
+  await incoming(h, OTHER, "a-other");
+  const event = (text) => ({
+    metadata: { channel: "telegram" },
+    content: text,
+  });
+  const owner = await h.on("message_sending", event("Owner answer"), {
+    channelId: "telegram", runId: "a-owner", sessionKey: SESSION,
+  });
+  const other = await h.on("message_sending", event("Other answer"), {
+    channelId: "telegram", runId: "a-other", sessionKey: SESSION,
+  });
+  const unknown = await h.on("message_sending",
+    event("W:old\nM:**openai/demo-model**\n\nUnknown answer"),
+    { channelId: "telegram", sessionKey: SESSION });
+  assert.match(owner.content, /^W:\*\*73%\*\*/);
+  assert.match(other.content, /^M:/);
+  assert.doesNotMatch(other.content, /W:/);
+  assert.equal(unknown.content, "M:**openai/demo-model**\n\nUnknown answer");
+});
+
+test("status and reasoning payloads bypass the header hook", async () => {
+  const h = harness();
+  const result = await h.on("reply_payload_sending", {
+    channel: "telegram",
+    kind: "block",
+    payload: { text: "status", isStatusNotice: true },
+  }, { channelId: "telegram" });
+  assert.equal(result, undefined);
+});
