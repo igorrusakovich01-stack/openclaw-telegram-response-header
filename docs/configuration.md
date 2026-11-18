@@ -12,6 +12,13 @@ openclaw config set plugins.entries.telegram-response-header.config.ownerTelegra
 
 Replace the example ID. Use your bot's /whoami command or Telegram's own account tools to find your ID.
 
+The same owner ID determines which normal Telegram replies include the full quota
+indicator (`W:` plus `M:`). Other users see only the model (`M:`).
+For reply attribution, the plugin uses a bounded metadata-only mapping of the
+sender to an exact run ID or session/message ID. If attribution is missing or
+ambiguous (for example, a background notification), W is hidden rather than
+exposing account usage. The owner ID is never stored in the repository.
+
 ## Optional
 
 ```bash
