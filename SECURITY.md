@@ -14,7 +14,12 @@ messages, tool results, or transcripts. Audit the source before granting this pe
 ## Private reports
 
 The `/limits` report is restricted to an authorized Telegram sender ID in a one-to-one chat.
-It is not intended for public group or topic use. The plugin's generated report can include
+It is not intended for public group or topic use.
+
+The normal Telegram W quota header is also owner-only. Other users see M only.
+The plugin avoids attributing a message to the last sender in a group/topic;
+it uses exact event identifiers and a bounded short-lived metadata-only map.
+Unknown origins result in M-only output. The plugin's generated report can include
 OAuth profile email addresses, which are private account metadata.
 
 ## Local data
