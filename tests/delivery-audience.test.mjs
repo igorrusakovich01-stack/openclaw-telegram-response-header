@@ -133,3 +133,55 @@ test("status and reasoning payloads bypass the header hook", async () => {
   }, { channelId: "telegram" });
   assert.equal(result, undefined);
 });
+
+test("report-shaped replies from unknown or other senders never bypass W privacy", async () => {
+  const h = harness();
+  await incoming(h, OTHER, "r-report-other");
+  const report = "W:**12%** [synthetic]\\nM:**—**\\n\\n📊 Usage data";
+
+  const normalUnknown = await h.on("message_sending", {
+    metadata: { channel: "telegram" }, content: report,
+  }, { channelId: "telegram", sessionKey: SESSION });
+  assert.ok(normalUnknown);
+  assert.equal(normalUnknown.content, "M:**—**\\n\\n📊 Usage data");
+
+  const normalOther = await h.on("message_sending", {
+    metadata: { channel: "telegram" }, content: report,
+  }, { channelId: "telegram", runId: "r-report-other", sessionKey: SESSION });
+  assert.ok(normalOther);
+  assert.doesNotMatch(normalOther.content, /^W:/);
+
+  const deliveryOther = await h.on("reply_payload_sending", {
+    channel: "telegram",
+    kind: "final",
+    runId: "r-report-other",
+    payload: { text: report },
+  }, { channelId: "telegram", runId: "r-report-other", sessionKey: SESSION });
+  assert.ok(deliveryOther);
+  assert.equal(deliveryOther.payload.text, "M:**—**\\n\\n📊 Usage data");
+});
+
+test("explicit authenticated owner /limits report retains its command header", async () => {
+  const h = harness();
+  const report = "W:**73%** [synthetic]\\nM:**—**\\n\\n📊 Usage data";
+  const directOwner = {
+    channel: "telegram",
+    channelId: "telegram",
+    senderId: OWNER,
+    from: "telegram:" + OWNER,
+    sessionKey: "agent:main:telegram:direct:" + OWNER,
+    messageThreadId: null,
+    isAuthorizedSender: true,
+  };
+
+  const normal = await h.on("message_sending", {
+    metadata: { channel: "telegram" }, content: report,
+  }, directOwner);
+  assert.equal(normal, undefined);
+
+  const delivery = await h.on("reply_payload_sending", {
+    channel: "telegram", kind: "final",
+    payload: { text: report },
+  }, directOwner);
+  assert.equal(delivery, undefined);
+});
