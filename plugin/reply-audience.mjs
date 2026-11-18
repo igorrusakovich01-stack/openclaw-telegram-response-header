@@ -48,7 +48,11 @@ export function createReplyAudienceTracker({
     if (!owner) return false;
     prune();
 
-    const sender = telegramId(ctx?.senderId);
+    const contextSender = telegramId(ctx?.senderId);
+    const eventSender = telegramId(event?.senderId);
+    // Conflicting sender evidence must never authorize the quota header.
+    if (contextSender && eventSender && contextSender !== eventSender) return false;
+    const sender = contextSender ?? eventSender;
     const runId = String(ctx?.runId ?? event?.runId ?? "").trim();
     const sessionKey = String(ctx?.sessionKey ?? event?.sessionKey ?? "").trim();
     const messageId = String(ctx?.messageId ?? event?.messageId ?? "").trim();
