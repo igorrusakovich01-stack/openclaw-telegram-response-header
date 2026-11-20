@@ -47,13 +47,19 @@ export function topicForCommand(ctx = {}) {
 
 export function topicForReply(event = {}, ctx = {}) {
   const session = String(ctx.sessionKey ?? event.sessionKey ?? "").trim();
-  if (session) return topicFromSession(session);
-
   const delivery = event.delivery ?? {};
   const rawThread = ctx.messageThreadId ?? event.threadId ??
     event.messageThreadId ?? delivery.threadId;
   const thread = topicNumber(rawThread);
   const chat = chatNumber(ctx.conversationId ?? event.to ?? delivery.to ?? ctx.channelId);
+  if (session) {
+    const exact = topicFromSession(session);
+    if (!exact) return null;
+    const found = /^telegram:group:(-100[0-9]+):topic:([1-9][0-9]*)$/u.exec(exact);
+    if (rawThread != null && thread !== found[2]) return null;
+    if (chat && chat !== found[1]) return null;
+    return exact;
+  }
   // Missing or inconsistent routing evidence must not inherit an override.
   return chat && thread ? "telegram:group:" + chat + ":topic:" + thread : null;
 }
