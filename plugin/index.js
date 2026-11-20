@@ -393,13 +393,14 @@ function resolveSessionModel(ctx, event) {
   return recent.length === 1 ? recent[0].ref : "?";
 }
 
-function isTopicHeaderOwner(ctx, configuredOwnerId) {
-  const owner = String(configuredOwnerId ?? "").trim();
+// For /header, the Telegram adapter's sender and topic are the scope.
+// Do not use OpenClaw's agent/owner allowlist: normal topic members may not
+// have isAuthorizedSender=true. /limits keeps its separate owner-only check.
+function isTopicHeaderParticipant(ctx) {
   const sender = String(ctx?.senderId ?? "").trim().replace(/^telegram:/u, "");
   return ctx?.channel === "telegram" &&
-    ctx?.isAuthorizedSender === true &&
-    /^[0-9]+$/u.test(owner) &&
-    sender === owner;
+    /^[1-9][0-9]{0,18}$/u.test(sender) &&
+    topicForCommand(ctx) !== null;
 }
 
 function formatTopicHeaderStatus(settings) {
@@ -459,13 +460,15 @@ export default definePluginEntry({
 
     api.registerCommand({
       name: "header",
-      description: "Configure W and M reply lines in this Telegram forum topic",
+      description: "Let any Telegram forum topic participant configure W/M lines",
       channels: ["telegram"],
-      requireAuth: true,
+      requireAuth: false,
       acceptsArgs: true,
       handler: async (ctx) => {
-        if (!isTopicHeaderOwner(ctx, api.pluginConfig?.ownerTelegramId)) {
-          return { text: "Header settings may be changed only by the configured Telegram owner." };
+        // The message must originate from a Telegram group topic with an
+        // identifiable sender, even when the sender is not an OpenClaw owner.
+        if (!isTopicHeaderParticipant(ctx)) {
+          return { text: "Use /header from a Telegram user inside a recognized forum topic." };
         }
         const scope = topicForCommand(ctx);
         if (!scope) {
