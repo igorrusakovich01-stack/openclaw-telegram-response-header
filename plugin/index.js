@@ -10,6 +10,10 @@ import {
   stripAnswerHeader,
   compactModelLine,
 } from "./reply-audience.mjs";
+import {
+  DEFAULT_LINES, NO_LINES, createTopicHeaderStore,
+  parseHeaderAction, topicForCommand, topicForReply,
+} from "./topic-header-settings.mjs";
 
 const CACHE_FILE = path.join(
   os.homedir(),
@@ -18,6 +22,7 @@ const CACHE_FILE = path.join(
   "codex-usage-current.json",
 );
 
+const HEADER_TOPICS_FILE = path.join(os.homedir(), ".openclaw", "telegram-response-header-topics.json");
 const RENDERER = path.join(os.homedir(), ".openclaw", "workspace", "tools", "render-limits-png");
 const IMAGE_DIR = path.join(os.homedir(), ".openclaw", "workspace", ".telegram-response-header-media");
 const runFile = promisify(execFile);
@@ -388,8 +393,40 @@ function resolveSessionModel(ctx, event) {
   return recent.length === 1 ? recent[0].ref : "?";
 }
 
-function alreadyHasUsageHeader(text) {
-  return /^\s*W:[^\n]*\nM:/u.test(text);
+function isTopicHeaderOwner(ctx, configuredOwnerId) {
+  const owner = String(configuredOwnerId ?? "").trim();
+  const sender = String(ctx?.senderId ?? "").trim().replace(/^telegram:/u, "");
+  return ctx?.channel === "telegram" &&
+    ctx?.isAuthorizedSender === true &&
+    /^[0-9]+$/u.test(owner) &&
+    sender === owner;
+}
+
+function formatTopicHeaderStatus(settings) {
+  return "Header for this topic: W " + (settings.w ? "on" : "off") +
+    ", M " + (settings.m ? "on" : "off") +
+    "\nCommands: /header status | w on/off | m on/off | on | off | reset";
+}
+
+async function renderTopicReplyHeader({ event, ctx, store, owner, modelLine }) {
+  const scope = topicForReply(event, ctx);
+  let settings;
+  if (scope) {
+    try {
+      settings = await store.read(scope);
+    } catch {
+      // A broken preference file must not disclose quota or bypass a topic-off rule.
+      settings = NO_LINES;
+    }
+  } else {
+    // Unknown topic routes must not inherit another topic's preferences.
+    const session = String(ctx?.sessionKey ?? event?.sessionKey ?? "");
+    settings = /:telegram:direct:[0-9]+$/u.test(session) ? DEFAULT_LINES : NO_LINES;
+  }
+  const lines = [];
+  if (owner && settings.w) lines.push(await readUsageHeader());
+  if (settings.m) lines.push(modelLine());
+  return lines.join("\n");
 }
 
 export default definePluginEntry({
@@ -401,6 +438,7 @@ export default definePluginEntry({
     // Metadata-only correlation; never infer the sender from the last
     // message in a shared Telegram group or topic.
     const replyAudience = createReplyAudienceTracker();
+    const topicHeaderStore = createTopicHeaderStore(HEADER_TOPICS_FILE);
     api.on("message_received", (event, ctx) => replyAudience.remember(event, ctx));
     api.on("before_dispatch", (event, ctx) => replyAudience.remember(event, ctx));
 
@@ -416,6 +454,36 @@ export default definePluginEntry({
           return { text: "⛔ /limits is available only to the authorized owner in a private chat. Configure ownerTelegramId." };
         }
         return await deliverLimitsImage(api, ctx);
+      },
+    });
+
+    api.registerCommand({
+      name: "header",
+      description: "Configure W and M reply lines in this Telegram forum topic",
+      channels: ["telegram"],
+      requireAuth: true,
+      acceptsArgs: true,
+      handler: async (ctx) => {
+        if (!isTopicHeaderOwner(ctx, api.pluginConfig?.ownerTelegramId)) {
+          return { text: "Header settings may be changed only by the configured Telegram owner." };
+        }
+        const scope = topicForCommand(ctx);
+        if (!scope) {
+          return { text: "Run /header inside a recognized Telegram forum topic." };
+        }
+        const action = parseHeaderAction(ctx.args);
+        if (!action) {
+          return { text: "Usage: /header status | w on/off | m on/off | on | off | reset" };
+        }
+        try {
+          const settings = action.type === "status"
+            ? await topicHeaderStore.read(scope)
+            : await topicHeaderStore.change(scope, action);
+          return { text: formatTopicHeaderStatus(settings) };
+        } catch {
+          api.logger?.warn?.("Telegram header topic settings are unavailable");
+          return { text: "Header settings could not be read or saved. No change was confirmed." };
+        }
       },
     });
 
@@ -475,11 +543,17 @@ export default definePluginEntry({
         /^\s*W:[^\n]*\nM:[^\n]*\n\n📊/u.test(content)) return;
       // Provider status/fallback notices are not model-generated answers.
       if (/^\s*↪️\s*Model Fallback/u.test(content)) return;
-      if (owner && alreadyHasUsageHeader(content)) return;
-      const observed = resolveSessionModel(ctx, event);
-      const modelHeader = observed !== "?" ? modelLineWithVersion(observed) : fallbackModelLineWithVersion(content);
-      const header = owner ? `${await readUsageHeader()}\n${modelHeader}` : modelHeader;
-      return { content: `${header}\n\n${stripAnswerHeader(content).trimStart()}` };
+      const header = await renderTopicReplyHeader({
+        event, ctx, store: topicHeaderStore, owner,
+        modelLine: () => {
+          const observed = resolveSessionModel(ctx, event);
+          return observed !== "?" ? modelLineWithVersion(observed)
+            : fallbackModelLineWithVersion(content);
+        },
+      });
+      const body = stripAnswerHeader(content).trimStart();
+      const finalText = header ? header + "\n\n" + body : body;
+      return finalText === content ? undefined : { content: finalText };
     });
 
     // The first streamed Telegram block may be delivered before the
@@ -563,12 +637,18 @@ export default definePluginEntry({
         return;
       }
 
-      const model = resolveActualModel(event, runId);
-      const modelHeader = model !== "?" ? modelLineWithVersion(model)
-        : fallbackModelLineWithVersion(event.payload.text);
-      const header = owner ? `${await readUsageHeader()}\n${modelHeader}` : modelHeader;
+      const header = await renderTopicReplyHeader({
+        event, ctx, store: topicHeaderStore, owner,
+        modelLine: () => {
+          const model = resolveActualModel(event, runId);
+          return model !== "?" ? modelLineWithVersion(model)
+            : fallbackModelLineWithVersion(event.payload.text);
+        },
+      });
 
       const body = stripAnswerHeader(event.payload.text).trimStart();
+      const finalText = header ? header + "\n\n" + body : body;
+      if (finalText === event.payload.text) return;
 
       // Dedupe only when correlation is known. Do not memoize a
       // session key as a run id: it would suppress future replies.
@@ -579,7 +659,7 @@ export default definePluginEntry({
       return {
         payload: {
           ...event.payload,
-          text: `${header}\n\n${body}`,
+          text: finalText,
         },
       };
     });
