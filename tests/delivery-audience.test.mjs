@@ -264,6 +264,19 @@ test("topic-off setting also suppresses message_sending headers across models", 
   assert.equal(result.content, "Just answer");
 });
 
+test("numeric channelId target does not hide Telegram delivery", async () => {
+  const h = harness();
+  await incoming(h, OTHER, "numeric-channel");
+  const result = await h.on("message_sending", {
+    metadata: { channel: "telegram" },
+    content: "Reply for topic",
+  }, {
+    channelId: "-100123", runId: "numeric-channel", sessionKey: SESSION,
+  });
+  assert.match(result.content, /^M:/);
+  assert.doesNotMatch(result.content, /^W:/);
+});
+
 test("status and reasoning payloads bypass the header hook", async () => {
   const h = harness();
   const result = await h.on("reply_payload_sending", {
