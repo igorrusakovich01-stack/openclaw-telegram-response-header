@@ -5,6 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createReplyAudienceTracker,
+  stripAnswerHeader,
+  compactModelLine,
+} from "./reply-audience.mjs";
+import {
+  DEFAULT_LINES, NO_LINES, createTopicHeaderStore,
+  parseHeaderAction, topicForCommand, topicForReply,
+} from "./topic-header-settings.mjs";
 
 const CACHE_FILE = path.join(
   os.homedir(),
@@ -13,6 +22,7 @@ const CACHE_FILE = path.join(
   "codex-usage-current.json",
 );
 
+const HEADER_TOPICS_FILE = path.join(os.homedir(), ".openclaw", "telegram-response-header-topics.json");
 const RENDERER = path.join(os.homedir(), ".openclaw", "workspace", "tools", "render-limits-png");
 const IMAGE_DIR = path.join(os.homedir(), ".openclaw", "workspace", ".telegram-response-header-media");
 const runFile = promisify(execFile);
@@ -65,6 +75,25 @@ function formatLocalTime(date = new Date(), api) {
     parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value])
   );
   return `${fields.day}.${fields.month} ${fields.hour}:${fields.minute}`;
+}
+
+// Expose a version only when the observed model ID states it explicitly.
+// Avoid inventing versions for aliases or unrecognized providers.
+function observedModelVersion(model) {
+  const found = /(?:^|[/-])(?:gpt-|qwen|gemini-)(\d+(?:\.\d+)+)(?=$|[-/])/iu.exec(String(model));
+  return found?.[1] ?? null;
+}
+
+function modelLineWithVersion(model, timestamp = true) {
+  const version = observedModelVersion(model);
+  const suffix = version ? ` · v${version}` : "";
+  return `M:**${model}**${suffix}${timestamp ? ` upd ${formatLocalTime()}` : ""}`;
+}
+
+function fallbackModelLineWithVersion(text) {
+  const line = compactModelLine(text);
+  const model = /^M:\*\*([^*\n]+)\*\*/u.exec(line)?.[1];
+  return model ? modelLineWithVersion(model, false) : line;
 }
 
 async function readUsageHeader() {
@@ -364,8 +393,41 @@ function resolveSessionModel(ctx, event) {
   return recent.length === 1 ? recent[0].ref : "?";
 }
 
-function alreadyHasUsageHeader(text) {
-  return /^\s*W:[^\n]*\nM:/u.test(text);
+// For /header, the Telegram adapter's sender and topic are the scope.
+// Do not use OpenClaw's agent/owner allowlist: normal topic members may not
+// have isAuthorizedSender=true. /limits keeps its separate owner-only check.
+function isTopicHeaderParticipant(ctx) {
+  const sender = String(ctx?.senderId ?? "").trim().replace(/^telegram:/u, "");
+  return ctx?.channel === "telegram" &&
+    /^[1-9][0-9]{0,18}$/u.test(sender) &&
+    topicForCommand(ctx) !== null;
+}
+
+function formatTopicHeaderStatus(settings) {
+  return "Header for this topic: W " + (settings.w ? "on" : "off") +
+    ", M " + (settings.m ? "on" : "off") +
+    "\nCommands: /header status | w on/off | m on/off | on | off | reset";
+}
+
+async function renderTopicReplyHeader({ event, ctx, store, owner, modelLine }) {
+  const scope = topicForReply(event, ctx);
+  let settings;
+  if (scope) {
+    try {
+      settings = await store.read(scope);
+    } catch {
+      // A broken preference file must not disclose quota or bypass a topic-off rule.
+      settings = NO_LINES;
+    }
+  } else {
+    // Unknown topic routes must not inherit another topic's preferences.
+    const session = String(ctx?.sessionKey ?? event?.sessionKey ?? "");
+    settings = /:telegram:direct:[0-9]+$/u.test(session) ? DEFAULT_LINES : NO_LINES;
+  }
+  const lines = [];
+  if (owner && settings.w) lines.push(await readUsageHeader());
+  if (settings.m) lines.push(modelLine());
+  return lines.join("\n");
 }
 
 export default definePluginEntry({
@@ -374,6 +436,13 @@ export default definePluginEntry({
   description: "Adds deterministic W/M headers to final Telegram agent replies.",
 
   register(api) {
+    // Metadata-only correlation; never infer the sender from the last
+    // message in a shared Telegram group or topic.
+    const replyAudience = createReplyAudienceTracker();
+    const topicHeaderStore = createTopicHeaderStore(HEADER_TOPICS_FILE);
+    api.on("message_received", (event, ctx) => replyAudience.remember(event, ctx));
+    api.on("before_dispatch", (event, ctx) => replyAudience.remember(event, ctx));
+
     api.registerCommand({
       name: "limits",
       description: "OpenAI usage limits and subscriptions",
@@ -386,6 +455,38 @@ export default definePluginEntry({
           return { text: "⛔ /limits is available only to the authorized owner in a private chat. Configure ownerTelegramId." };
         }
         return await deliverLimitsImage(api, ctx);
+      },
+    });
+
+    api.registerCommand({
+      name: "header",
+      description: "Let any Telegram forum topic participant configure W/M lines",
+      channels: ["telegram"],
+      requireAuth: false,
+      acceptsArgs: true,
+      handler: async (ctx) => {
+        // The message must originate from a Telegram group topic with an
+        // identifiable sender, even when the sender is not an OpenClaw owner.
+        if (!isTopicHeaderParticipant(ctx)) {
+          return { text: "Use /header from a Telegram user inside a recognized forum topic." };
+        }
+        const scope = topicForCommand(ctx);
+        if (!scope) {
+          return { text: "Run /header inside a recognized Telegram forum topic." };
+        }
+        const action = parseHeaderAction(ctx.args);
+        if (!action) {
+          return { text: "Usage: /header status | w on/off | m on/off | on | off | reset" };
+        }
+        try {
+          const settings = action.type === "status"
+            ? await topicHeaderStore.read(scope)
+            : await topicHeaderStore.change(scope, action);
+          return { text: formatTopicHeaderStatus(settings) };
+        } catch {
+          api.logger?.warn?.("Telegram header topic settings are unavailable");
+          return { text: "Header settings could not be read or saved. No change was confirmed." };
+        }
       },
     });
 
@@ -433,14 +534,30 @@ export default definePluginEntry({
 
     // The final-delivery fallback must cover Telegram's provider-owned route.
     api.on("message_sending", async (event, ctx) => {
-      const channel = ctx?.channelId ?? event.metadata?.channel;
+      const channel = event?.metadata?.channel ?? event?.channel ??
+        ctx?.messageProvider ?? ctx?.channel ?? ctx?.channelId;
       if (channel !== "telegram" || typeof event.content !== "string") return;
       const content = event.content;
-      if (!content.trim() || alreadyHasUsageHeader(content)) return;
+      if (!content.trim()) return;
+      const owner = replyAudience.isOwnerReply(event, ctx, api.pluginConfig?.ownerTelegramId);
+      const authenticatedOwnerCommand = Boolean(ctx) &&
+        isDirectOwnerCommand(ctx, String(api.pluginConfig?.ownerTelegramId ?? "").trim());
+      // A report-shaped body alone is not proof of authorization.
+      if ((owner || authenticatedOwnerCommand) &&
+        /^\s*W:[^\n]*\nM:[^\n]*\n\n📊/u.test(content)) return;
       // Provider status/fallback notices are not model-generated answers.
       if (/^\s*↪️\s*Model Fallback/u.test(content)) return;
-      const model = resolveSessionModel(ctx, event);
-      return { content: `${await readUsageHeader()}\nM:**${model}**\n\n${stripOldHeader(content).trimStart()}` };
+      const header = await renderTopicReplyHeader({
+        event, ctx, store: topicHeaderStore, owner,
+        modelLine: () => {
+          const observed = resolveSessionModel(ctx, event);
+          return observed !== "?" ? modelLineWithVersion(observed)
+            : fallbackModelLineWithVersion(content);
+        },
+      });
+      const body = stripAnswerHeader(content).trimStart();
+      const finalText = header ? header + "\n\n" + body : body;
+      return finalText === content ? undefined : { content: finalText };
     });
 
     // The first streamed Telegram block may be delivered before the
@@ -475,7 +592,7 @@ export default definePluginEntry({
     });
 
     api.on("reply_payload_sending", async (event, ctx) => {
-      const channel = event.channel ?? ctx?.channelId;
+      const channel = event.channel ?? ctx?.messageProvider ?? ctx?.channel ?? ctx?.channelId;
       if (channel !== "telegram") {
         return;
       }
@@ -505,9 +622,13 @@ export default definePluginEntry({
         return;
       }
 
-      // This command produces its own truthful header without invoking an LLM.
-      // Do not replace M:— with a fabricated model label.
-      if (/^W:[^\n]*\nM:[^\n]*\n\n📊 /u.test(event.payload.text)) {
+      const owner = replyAudience.isOwnerReply(event, ctx, api.pluginConfig?.ownerTelegramId);
+      const authenticatedOwnerCommand = Boolean(ctx) &&
+        isDirectOwnerCommand(ctx, String(api.pluginConfig?.ownerTelegramId ?? "").trim());
+      // Only an authenticated owner command may retain its own W/M header.
+      // A report-shaped body without owner evidence must be sanitized.
+      if ((owner || authenticatedOwnerCommand) &&
+        /^W:[^\n]*\nM:[^\n]*\n\n📊 /u.test(event.payload.text)) {
         return;
       }
 
@@ -520,11 +641,18 @@ export default definePluginEntry({
         return;
       }
 
-      const usageHeader = await readUsageHeader();
-      const model = resolveActualModel(event, runId);
-      const modelHeader = `M:**${model}**`;
+      const header = await renderTopicReplyHeader({
+        event, ctx, store: topicHeaderStore, owner,
+        modelLine: () => {
+          const model = resolveActualModel(event, runId);
+          return model !== "?" ? modelLineWithVersion(model)
+            : fallbackModelLineWithVersion(event.payload.text);
+        },
+      });
 
-      const body = stripOldHeader(event.payload.text).trimStart();
+      const body = stripAnswerHeader(event.payload.text).trimStart();
+      const finalText = header ? header + "\n\n" + body : body;
+      if (finalText === event.payload.text) return;
 
       // Dedupe only when correlation is known. Do not memoize a
       // session key as a run id: it would suppress future replies.
@@ -535,7 +663,7 @@ export default definePluginEntry({
       return {
         payload: {
           ...event.payload,
-          text: `${usageHeader}\n${modelHeader}\n\n${body}`,
+          text: finalText,
         },
       };
     });

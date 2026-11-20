@@ -12,6 +12,14 @@ openclaw config set plugins.entries.telegram-response-header.config.ownerTelegra
 
 Replace the example ID. Use your bot's /whoami command or Telegram's own account tools to find your ID.
 
+The owner ID only protects quota visibility and private `/limits`. Any identifiable
+Telegram forum-topic participant can modify that topic's W/M settings using `/header`.
+A participant may enable W for the topic, but W is displayed only on replies
+confirmed as originating from the configured owner.
+By default W is off, M is on. The reply audience is correlated using exact
+run or message metadata; an unidentified topic suppresses both lines.
+The owner ID is never stored in the repository.
+
 ## Optional
 
 ```bash
@@ -46,3 +54,17 @@ openclaw gateway status --deep
 
 The quota cache is refreshed every five minutes and considered fresh for ten minutes.
 The plugin shows an unknown quota when valid data is unavailable.
+
+## Per-topic slash command
+
+Run `/header` or `/header status` in a Telegram forum topic to inspect its
+settings. Any participant who can send a Telegram message in that topic may use
+`/header w on/off`, `/header m on/off`, `/header on/off`, or `/header reset`.
+The command does not require OpenClaw owner authorization; the sender ID and
+topic routing must be identifiable. The last valid change wins. No LLM call is needed. The same settings apply to every agent and
+model routed to that group/topic, even when model routing changes.
+
+Preferences are private local state in
+`~/.openclaw/telegram-response-header-topics.json`, atomically written
+with file mode 0600. Do not commit that file or its group identifiers to Git.
+The owner-only `/limits` report remains a separate private-chat command.
