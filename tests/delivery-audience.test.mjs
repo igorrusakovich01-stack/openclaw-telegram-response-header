@@ -238,6 +238,31 @@ test("default W off, M on; any topic participant can change, but unknown origins
   assert.doesNotMatch(result.payload.text, /W:/);
 });
 
+test("ordinary participant may enable W, but quota is still owner-only", async () => {
+  const h = harness();
+  const changed = await h.command("header", {
+    ...ownerTopicCommand("w on", OTHER), isAuthorizedSender: false,
+  });
+  assert.match(changed.text, /W on, M on/);
+
+  await incoming(h, OTHER, "member-w");
+  const member = await h.on("reply_payload_sending", {
+    channel: "telegram", kind: "final", runId: "member-w",
+    usageState: { resolvedRef: "openai/gpt-6.2-sol" },
+    payload: { text: "Member response" },
+  }, { channelId: "telegram", sessionKey: SESSION, runId: "member-w" });
+  assert.match(member.payload.text, /^M:/);
+  assert.doesNotMatch(member.payload.text, /^W:/);
+
+  await incoming(h, OWNER, "owner-w");
+  const owner = await h.on("reply_payload_sending", {
+    channel: "telegram", kind: "final", runId: "owner-w",
+    usageState: { resolvedRef: "openai/gpt-6.2-sol" },
+    payload: { text: "Owner response" },
+  }, { channelId: "telegram", sessionKey: SESSION, runId: "owner-w" });
+  assert.match(owner.payload.text, /^W:/);
+});
+
 test("per-topic /header controls W and M independently, reset restores defaults", async () => {
   const h = harness();
   const topic18 = SESSION.replace(":topic:17", ":topic:18");
