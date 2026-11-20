@@ -49,7 +49,7 @@ direct-message sessions use the default (M only).
 ### Per-topic slash commands
 
 Run these **inside the Telegram forum topic you want to configure**.
-Only the configured Telegram owner can change settings:
+Anyone who can send a message in the Telegram forum topic can change its W/M settings:
 
 | Command | Effect in the current topic |
 | --- | --- |
@@ -63,7 +63,7 @@ These settings are keyed by Telegram group and topic, **not by agent or
 model**, so they survive model changes and Gateway restarts. They are stored
 privately at `~/.openclaw/telegram-response-header-topics.json` (mode 0600);
 no settings, group IDs, or user IDs are committed to this repository.
-Commands do not call an LLM. The owner-only `/limits` report is separate
+The command requires a Telegram sender ID and an exact forum-topic route, but does not require OpenClaw owner authorization. Any topic participant can overwrite another participant's choices; the last valid change wins. Commands do not call an LLM. The owner-only `/limits` report is separate
 and remains available in the owner's private chat.
 
 ## Requirements
