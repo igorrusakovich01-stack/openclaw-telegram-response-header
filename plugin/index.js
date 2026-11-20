@@ -72,6 +72,25 @@ function formatLocalTime(date = new Date(), api) {
   return `${fields.day}.${fields.month} ${fields.hour}:${fields.minute}`;
 }
 
+// Expose a version only when the observed model ID states it explicitly.
+// Avoid inventing versions for aliases or unrecognized providers.
+function observedModelVersion(model) {
+  const found = /(?:^|[/-])(?:gpt-|qwen|gemini-)(\d+(?:\.\d+)+)(?=$|[-/])/iu.exec(String(model));
+  return found?.[1] ?? null;
+}
+
+function modelLineWithVersion(model, timestamp = true) {
+  const version = observedModelVersion(model);
+  const suffix = version ? ` · v${version}` : "";
+  return `M:**${model}**${suffix}${timestamp ? ` upd ${formatLocalTime()}` : ""}`;
+}
+
+function fallbackModelLineWithVersion(text) {
+  const line = compactModelLine(text);
+  const model = /^M:\*\*([^*\n]+)\*\*/u.exec(line)?.[1];
+  return model ? modelLineWithVersion(model, false) : line;
+}
+
 async function readUsageHeader() {
   try {
     const raw = await readFile(CACHE_FILE, "utf8");
@@ -458,7 +477,7 @@ export default definePluginEntry({
       if (/^\s*↪️\s*Model Fallback/u.test(content)) return;
       if (owner && alreadyHasUsageHeader(content)) return;
       const observed = resolveSessionModel(ctx, event);
-      const modelHeader = observed !== "?" ? `M:**${observed}** upd ${formatLocalTime()}` : compactModelLine(content);
+      const modelHeader = observed !== "?" ? modelLineWithVersion(observed) : fallbackModelLineWithVersion(content);
       const header = owner ? `${await readUsageHeader()}\n${modelHeader}` : modelHeader;
       return { content: `${header}\n\n${stripAnswerHeader(content).trimStart()}` };
     });
@@ -545,8 +564,8 @@ export default definePluginEntry({
       }
 
       const model = resolveActualModel(event, runId);
-      const modelHeader = model !== "?" ? `M:**${model}** upd ${formatLocalTime()}`
-        : compactModelLine(event.payload.text);
+      const modelHeader = model !== "?" ? modelLineWithVersion(model)
+        : fallbackModelLineWithVersion(event.payload.text);
       const header = owner ? `${await readUsageHeader()}\n${modelHeader}` : modelHeader;
 
       const body = stripAnswerHeader(event.payload.text).trimStart();
