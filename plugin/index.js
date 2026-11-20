@@ -531,7 +531,8 @@ export default definePluginEntry({
 
     // The final-delivery fallback must cover Telegram's provider-owned route.
     api.on("message_sending", async (event, ctx) => {
-      const channel = ctx?.channelId ?? event.metadata?.channel;
+      const channel = event?.metadata?.channel ?? event?.channel ??
+        ctx?.messageProvider ?? ctx?.channel ?? ctx?.channelId;
       if (channel !== "telegram" || typeof event.content !== "string") return;
       const content = event.content;
       if (!content.trim()) return;
@@ -588,7 +589,7 @@ export default definePluginEntry({
     });
 
     api.on("reply_payload_sending", async (event, ctx) => {
-      const channel = event.channel ?? ctx?.channelId;
+      const channel = event.channel ?? ctx?.messageProvider ?? ctx?.channel ?? ctx?.channelId;
       if (channel !== "telegram") {
         return;
       }
