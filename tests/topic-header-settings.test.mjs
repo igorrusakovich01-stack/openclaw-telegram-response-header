@@ -37,7 +37,7 @@ test("reply scope accepts an exact session or verified outbound topic target", (
   assert.equal(topicForReply({}, { sessionKey: SESSION }), KEY);
   assert.equal(topicForReply({ to: "-100123", threadId: 17 }, {}), KEY);
   assert.equal(topicForReply({ to: "-100123" }, {}), null);
-  assert.equal(topicForReply({ to: "-100123", threadId: 18 }, { sessionKey: SESSION }), KEY);
+  assert.equal(topicForReply({ to: "-100123", threadId: 18 }, { sessionKey: SESSION }), null);
   assert.equal(topicForReply({}, { sessionKey: "agent:test:telegram:direct:123" }), null);
 });
 
