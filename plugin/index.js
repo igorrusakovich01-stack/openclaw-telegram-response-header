@@ -458,7 +458,7 @@ export default definePluginEntry({
       if (/^\s*↪️\s*Model Fallback/u.test(content)) return;
       if (owner && alreadyHasUsageHeader(content)) return;
       const observed = resolveSessionModel(ctx, event);
-      const modelHeader = observed !== "?" ? `M:**${observed}**` : compactModelLine(content);
+      const modelHeader = observed !== "?" ? `M:**${observed}** upd ${formatLocalTime()}` : compactModelLine(content);
       const header = owner ? `${await readUsageHeader()}\n${modelHeader}` : modelHeader;
       return { content: `${header}\n\n${stripAnswerHeader(content).trimStart()}` };
     });
@@ -545,7 +545,7 @@ export default definePluginEntry({
       }
 
       const model = resolveActualModel(event, runId);
-      const modelHeader = model !== "?" ? `M:**${model}**`
+      const modelHeader = model !== "?" ? `M:**${model}** upd ${formatLocalTime()}`
         : compactModelLine(event.payload.text);
       const header = owner ? `${await readUsageHeader()}\n${modelHeader}` : modelHeader;
 
