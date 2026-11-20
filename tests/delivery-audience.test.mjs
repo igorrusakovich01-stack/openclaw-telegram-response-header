@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync } from "node:fs";
+import {
+  DEFAULT_LINES, NO_LINES, createTopicHeaderStore,
+  parseHeaderAction, topicForCommand, topicForReply,
+} from "../plugin/topic-header-settings.mjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
@@ -20,6 +24,7 @@ const source = readFileSync(path.join(root, "plugin/index.js"), "utf8");
 
 function harness() {
   // Evaluate the real plugin body against a minimal OpenClaw event mock.
+  const fakeHome = mkdtempSync(path.join(os.tmpdir(), "header-delivery-test-"));
   // Never connect to a real Gateway, Telegram, files or OAuth profiles.
   const body = source.slice(source.indexOf("const CACHE_FILE = path.join("))
     .replace("export default definePluginEntry(", "globalThis.pluginEntry = definePluginEntry(");
@@ -30,8 +35,10 @@ function harness() {
   });
   const context = {
     process: { env: {} },
-    os,
+    os: { homedir: () => fakeHome },
     path,
+    DEFAULT_LINES, NO_LINES, createTopicHeaderStore,
+    parseHeaderAction, topicForCommand, topicForReply,
     promisify,
     execFile: (_file, _args, _opts, callback) => callback(null, "", ""),
     randomUUID: () => "synthetic",
@@ -49,13 +56,14 @@ function harness() {
   };
   vm.runInNewContext(body, context, { timeout: 2000 });
   const hooks = new Map();
+  const commands = new Map();
   const api = {
     pluginConfig: { ownerTelegramId: OWNER },
     on(name, fn) {
       assert.equal(hooks.has(name), false, "Duplicate hook: " + name);
       hooks.set(name, fn);
     },
-    registerCommand() {},
+    registerCommand(command) { commands.set(command.name, command); },
   };
   context.pluginEntry.register(api);
   return {
@@ -64,6 +72,18 @@ function harness() {
       assert.ok(hooks.has(name), "Missing hook: " + name);
       return hooks.get(name)(event, ctx);
     },
+    command: (name, ctx) => {
+      assert.ok(commands.has(name), "Missing slash command: " + name);
+      return commands.get(name).handler(ctx);
+    },
+  };
+}
+
+function ownerTopicCommand(args = "", sender = OWNER) {
+  return {
+    channel: "telegram", isAuthorizedSender: true, senderId: sender,
+    from: "telegram:group:-100123", messageThreadId: 17,
+    sessionKey: SESSION, args,
   };
 }
 
@@ -81,6 +101,7 @@ async function incoming(h, sender, id) {
 
 test("reply_payload_sending: owner has W/M, other has M only", async () => {
   const h = harness();
+  await h.command("header", ownerTopicCommand("w on"));
   await incoming(h, OWNER, "r-owner");
   await incoming(h, OTHER, "r-other");
   const event = (runId) => ({
@@ -106,6 +127,7 @@ test("reply_payload_sending: owner has W/M, other has M only", async () => {
 
 test("version 6.2 is explicit for observed model and no version is invented for aliases", async () => {
   const h = harness();
+  await h.command("header", ownerTopicCommand("w on"));
   await incoming(h, OWNER, "v-owner");
   await incoming(h, OTHER, "v-other");
 
@@ -148,6 +170,7 @@ test("version 6.2 is explicit in native message_sending model observations", asy
 
 test("message_sending: owner has W/M, other M-only, unknown strips old W", async () => {
   const h = harness();
+  await h.command("header", ownerTopicCommand("w on"));
   await incoming(h, OWNER, "a-owner");
   await incoming(h, OTHER, "a-other");
   const event = (text) => ({
@@ -167,6 +190,78 @@ test("message_sending: owner has W/M, other M-only, unknown strips old W", async
   assert.match(other.content, /^M:/);
   assert.doesNotMatch(other.content, /W:/);
   assert.equal(unknown.content, "M:**openai/demo-model**\n\nUnknown answer");
+});
+
+test("default W off, M on; only owner can change this topic", async () => {
+  const h = harness();
+  const original = await h.command("header", ownerTopicCommand());
+  assert.match(original.text, /W off, M on/);
+  const stranger = await h.command("header", ownerTopicCommand("w on", OTHER));
+  assert.match(stranger.text, /only by the configured Telegram owner/);
+  const untrusted = await h.command("header", {
+    ...ownerTopicCommand("w on"), isAuthorizedSender: false,
+  });
+  assert.match(untrusted.text, /only by the configured Telegram owner/);
+  const contradictory = await h.command("header", {
+    ...ownerTopicCommand("w on"), messageThreadId: 19,
+  });
+  assert.match(contradictory.text, /recognized Telegram forum topic/);
+  assert.match((await h.command("header", ownerTopicCommand())).text, /W off, M on/);
+
+  await incoming(h, OWNER, "default-owner");
+  const result = await h.on("reply_payload_sending", {
+    channel: "telegram", kind: "final", runId: "default-owner",
+    usageState: { resolvedRef: "openai/gpt-6.2-sol" },
+    payload: { text: "Hello" },
+  }, { channelId: "telegram", sessionKey: SESSION, runId: "default-owner" });
+  assert.match(result.payload.text, /^M:\*\*openai\/gpt-6\.2-sol\*\* · v6\.2/);
+  assert.doesNotMatch(result.payload.text, /W:/);
+});
+
+test("per-topic /header controls W and M independently, reset restores defaults", async () => {
+  const h = harness();
+  const topic18 = SESSION.replace(":topic:17", ":topic:18");
+  assert.match((await h.command("header", ownerTopicCommand("m off"))).text, /W off, M off/);
+  await incoming(h, OWNER, "disabled-owner");
+  const disabled = await h.on("reply_payload_sending", {
+    channel: "telegram", kind: "final", runId: "disabled-owner",
+    usageState: { resolvedRef: "openai/gpt-6.2-sol" },
+    payload: { text: "W:**12%**\nM:**old**\n\nReal body" },
+  }, { channelId: "telegram", runId: "disabled-owner", sessionKey: SESSION });
+  assert.equal(disabled.payload.text, "Real body");
+
+  await incoming(h, OTHER, "topic18");
+  const otherTopic = await h.on("reply_payload_sending", {
+    channel: "telegram", kind: "final", runId: "topic18",
+    usageState: { resolvedRef: "openai/gpt-6.2-sol" },
+    payload: { text: "Different topic" },
+  }, { channelId: "telegram", runId: "topic18", sessionKey: topic18 });
+  assert.match(otherTopic.payload.text, /^M:/);
+
+  await h.command("header", ownerTopicCommand("w on"));
+  assert.match((await h.command("header", ownerTopicCommand())).text, /W on, M off/);
+  await incoming(h, OWNER, "w-only");
+  const wOnly = await h.on("reply_payload_sending", {
+    channel: "telegram", kind: "final", runId: "w-only",
+    payload: { text: "Quota only" },
+  }, { channelId: "telegram", sessionKey: SESSION, runId: "w-only" });
+  assert.match(wOnly.payload.text, /^W:\*\*73%\*\*/);
+  assert.doesNotMatch(wOnly.payload.text, /M:/);
+
+  await h.command("header", ownerTopicCommand("reset"));
+  assert.match((await h.command("header", ownerTopicCommand())).text, /W off, M on/);
+});
+
+test("topic-off setting also suppresses message_sending headers across models", async () => {
+  const h = harness();
+  await h.command("header", ownerTopicCommand("off"));
+  await incoming(h, OWNER, "off-run");
+  const result = await h.on("message_sending", {
+    metadata: { channel: "telegram" },
+    content: "W:**12%**\nM:**old**\n\nJust answer",
+  }, { channelId: "telegram", runId: "off-run",
+       sessionKey: "agent:other-model:telegram:group:-100123:topic:17" });
+  assert.equal(result.content, "Just answer");
 });
 
 test("status and reasoning payloads bypass the header hook", async () => {
