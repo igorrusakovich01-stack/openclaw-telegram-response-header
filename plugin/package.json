@@ -1,6 +1,6 @@
 {
   "name": "@local/openclaw-telegram-response-header",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "type": "module",
   "peerDependencies": {
     "openclaw": ">=2026.10.4"
