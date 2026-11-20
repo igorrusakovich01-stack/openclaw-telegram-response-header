@@ -77,7 +77,7 @@ export function createReplyAudienceTracker({
 
 export function stripAnswerHeader(text) {
   return String(text ?? "").replace(
-    /^\s*(?:W:[^\n]*\n)?M:[^\n]*(?:\n\s*)?/u,
+    /^\s*(?:(?:W|M):[^\n]*(?:\n|$)){1,2}\s*/u,
     "",
   );
 }
