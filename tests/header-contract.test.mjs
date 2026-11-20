@@ -31,7 +31,8 @@ test("both Telegram reply paths and observed model hooks exist", () => {
   assert.match(plugin, /topicHeaderStore\.change\(scope, action\)/);
   assert.match(plugin, /topicForReply\(event, ctx\)/);
   assert.match(plugin, /name:\s*"header"/);
-  assert.match(plugin, /isTopicHeaderOwner\(ctx, api\.pluginConfig\?\.ownerTelegramId\)/);
+  assert.match(plugin, /isTopicHeaderParticipant\(ctx\)/);
+  assert.match(plugin, /requireAuth:\s*false/);
   assert.match(plugin, /const observed = resolveSessionModel\(ctx, event\)/);
   assert.match(plugin, /const replyAudience = createReplyAudienceTracker\(\)/);
   assert.equal(
