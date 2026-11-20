@@ -24,7 +24,7 @@ OAuth profile email addresses, which are private account metadata.
 
 ## Local data
 
-Private per-topic settings are stored in `~/.openclaw/telegram-response-header-topics.json`, written atomically with mode 0600. Only an authenticated Telegram owner may change these settings via `/header`. Never commit or share the file, as it contains Telegram group/topic identifiers.
+Private per-topic settings are stored in `~/.openclaw/telegram-response-header-topics.json`, written atomically with mode 0600. Any identifiable Telegram participant in a forum topic may change that topic's settings via `/header`, even without OpenClaw owner authorization. This is intentional: any participant can disable M or enable W for the topic, but W remains visible only on replies verified as belonging to the configured owner. Do not commit or share the file, as it contains Telegram group/topic identifiers.
 
 The usage cache is kept on the machine at `~/.openclaw/workspace/codex-usage-current.json`.
 The updater writes atomically with file mode 0600. Generated PNG files are kept in a local
