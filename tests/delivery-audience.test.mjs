@@ -76,6 +76,7 @@ function harness() {
       assert.ok(commands.has(name), "Missing slash command: " + name);
       return commands.get(name).handler(ctx);
     },
+    commandRegistration: (name) => commands.get(name),
   };
 }
 
@@ -192,20 +193,39 @@ test("message_sending: owner has W/M, other M-only, unknown strips old W", async
   assert.equal(unknown.content, "M:**openai/demo-model**\n\nUnknown answer");
 });
 
-test("default W off, M on; only owner can change this topic", async () => {
+test("default W off, M on; any topic participant can change, but unknown origins cannot", async () => {
   const h = harness();
+  assert.equal(h.commandRegistration("header").requireAuth, false);
+  assert.equal(h.commandRegistration("limits").requireAuth, true);
   const original = await h.command("header", ownerTopicCommand());
   assert.match(original.text, /W off, M on/);
-  const stranger = await h.command("header", ownerTopicCommand("w on", OTHER));
-  assert.match(stranger.text, /only by the configured Telegram owner/);
-  const untrusted = await h.command("header", {
-    ...ownerTopicCommand("w on"), isAuthorizedSender: false,
+
+  const member = await h.command("header", {
+    ...ownerTopicCommand("m off", OTHER), isAuthorizedSender: false,
   });
-  assert.match(untrusted.text, /only by the configured Telegram owner/);
+  assert.match(member.text, /W off, M off/);
+  // An ordinary participant can change the same topic again.
+  assert.match((await h.command("header", {
+    ...ownerTopicCommand("m on", OTHER), isAuthorizedSender: false,
+  })).text, /W off, M on/);
+
+  const anonymous = await h.command("header", {
+    ...ownerTopicCommand("w on"), senderId: null, isAuthorizedSender: false,
+  });
+  assert.match(anonymous.text, /Use \/header from a Telegram user/);
+  const forged = await h.command("header", {
+    ...ownerTopicCommand("w on"), senderId: "telegram:group:-100123",
+  });
+  assert.match(forged.text, /Use \/header from a Telegram user/);
+  const fromDirect = await h.command("header", {
+    ...ownerTopicCommand("w on", OTHER),
+    sessionKey: "agent:main:telegram:direct:222222222",
+  });
+  assert.match(fromDirect.text, /Use \/header from a Telegram user/);
   const contradictory = await h.command("header", {
-    ...ownerTopicCommand("w on"), messageThreadId: 19,
+    ...ownerTopicCommand("w on", OTHER), messageThreadId: 19,
   });
-  assert.match(contradictory.text, /recognized Telegram forum topic/);
+  assert.match(contradictory.text, /Use \/header from a Telegram user/);
   assert.match((await h.command("header", ownerTopicCommand())).text, /W off, M on/);
 
   await incoming(h, OWNER, "default-owner");
