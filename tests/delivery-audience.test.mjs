@@ -97,6 +97,9 @@ test("reply_payload_sending: owner has W/M, other has M only", async () => {
     channelId: "telegram", runId: "r-other", sessionKey: SESSION,
   });
   assert.match(owner.payload.text, /^W:\*\*73%\*\*.*\nM:\*\*openai\/demo-model\*\*/);
+  // The actual observed model must retain the documented update timestamp.
+  assert.match(owner.payload.text, /M:\*\*openai\/demo-model\*\* upd \d{2}\.\d{2} \d{2}:\d{2}/);
+  assert.match(other.payload.text, /M:\*\*openai\/demo-model\*\* upd \d{2}\.\d{2} \d{2}:\d{2}/);
   assert.match(other.payload.text, /^M:\*\*openai\/demo-model\*\*/);
   assert.doesNotMatch(other.payload.text, /W:/);
 });
