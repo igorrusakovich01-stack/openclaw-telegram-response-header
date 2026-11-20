@@ -27,7 +27,11 @@ test("both Telegram reply paths and observed model hooks exist", () => {
     "reply_payload_sending", "message_sending", "llm_input", "llm_output",
     "model_call_started", "model_call_ended"
   ]) assert.ok(plugin.includes(`api.on("${name}"`), `Missing ${name}`);
-  assert.match(plugin, /alreadyHasUsageHeader\(content\)/);
+  assert.match(plugin, /renderTopicReplyHeader\(/);
+  assert.match(plugin, /topicHeaderStore\.change\(scope, action\)/);
+  assert.match(plugin, /topicForReply\(event, ctx\)/);
+  assert.match(plugin, /name:\s*"header"/);
+  assert.match(plugin, /isTopicHeaderOwner\(ctx, api\.pluginConfig\?\.ownerTelegramId\)/);
   assert.match(plugin, /const observed = resolveSessionModel\(ctx, event\)/);
   assert.match(plugin, /const replyAudience = createReplyAudienceTracker\(\)/);
   assert.equal(
