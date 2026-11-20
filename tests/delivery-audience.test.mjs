@@ -104,6 +104,48 @@ test("reply_payload_sending: owner has W/M, other has M only", async () => {
   assert.doesNotMatch(other.payload.text, /W:/);
 });
 
+test("version 6.2 is explicit for observed model and no version is invented for aliases", async () => {
+  const h = harness();
+  await incoming(h, OWNER, "v-owner");
+  await incoming(h, OTHER, "v-other");
+
+  const owner = await h.on("reply_payload_sending", {
+    kind: "final", channel: "telegram", runId: "v-owner",
+    usageState: { resolvedRef: "openai/gpt-6.2-sol" },
+    payload: { text: "Versioned answer" },
+  }, { channelId: "telegram", sessionKey: SESSION, runId: "v-owner" });
+
+  assert.match(owner.payload.text, /^W:/);
+  assert.match(owner.payload.text,
+    /M:\*\*openai\/gpt-6\.2-sol\*\* · v6\.2 upd \d{2}\.\d{2} \d{2}:\d{2}/);
+
+  const other = await h.on("reply_payload_sending", {
+    kind: "final", channel: "telegram", runId: "v-other",
+    usageState: { resolvedRef: "openai/model-alias" },
+    payload: { text: "Unversioned answer" },
+  }, { channelId: "telegram", sessionKey: SESSION, runId: "v-other" });
+
+  assert.match(other.payload.text, /^M:\*\*openai\/model-alias\*\* upd /);
+  assert.doesNotMatch(other.payload.text, / · v\d/);
+  assert.doesNotMatch(other.payload.text, /^W:/);
+});
+
+test("version 6.2 is explicit in native message_sending model observations", async () => {
+  const h = harness();
+  await incoming(h, OTHER, "v-message");
+  await h.on("llm_input", {
+    provider: "openai", model: "gpt-6.2-sol", runId: "v-message",
+  }, { sessionKey: SESSION });
+
+  const result = await h.on("message_sending", {
+    metadata: { channel: "telegram" }, content: "Hello",
+  }, { channelId: "telegram", runId: "v-message", sessionKey: SESSION });
+
+  assert.match(result.content,
+    /^M:\*\*openai\/gpt-6\.2-sol\*\* · v6\.2 upd /);
+  assert.doesNotMatch(result.content, /^W:/);
+});
+
 test("message_sending: owner has W/M, other M-only, unknown strips old W", async () => {
   const h = harness();
   await incoming(h, OWNER, "a-owner");
