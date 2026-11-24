@@ -22,7 +22,7 @@ Control Telegram reply headers by topic: show the observed model and optional Op
 
 ## Features
 
-- **W:** optional cached OpenAI weekly quota remaining, available only on replies to the configured owner when enabled in that topic (off by default).
+- **W:** optional cached OpenAI weekly quota remaining, visible to every participant on ordinary replies when enabled in that topic (off by default).
 - **M:** observed model identifier, explicit version when present in the identifier (e.g. `gpt-6.2-sol` -> `v6.2`), and update time. It is on by default per identifiable topic; unknown versions are not invented.
 - **`/limits`:** owner-only private Telegram command for a per-subscription PNG usage report, with text fallback. It does not invoke an LLM.
 - **Multiple OpenAI OAuth profiles:** reads available profiles and shows each subscription; combines percentages only when provider plan information is comparable.
@@ -40,8 +40,7 @@ Your bot's normal response...
 ```
 
 The model name, version, and timestamp above are synthetic examples.
-In a topic with W enabled, **only replies attributable to the configured
-owner** can include W. When both lines are off, no header is added.
+In a topic with W enabled, every participant can see the aggregate quota on ordinary replies. **Any participant can enable W**, including in existing topics with saved W-on settings. Do not install this version in groups where aggregate quota must remain private. When both lines are off, no header is added. `/header` command responses carry no model header.
 If topic routing is ambiguous, both lines are suppressed rather than
 incorrectly applying another topic's settings. Explicitly identified
 direct-message sessions use the default (M only).
@@ -130,7 +129,7 @@ See [Configuration](docs/configuration.md) and [Security and privacy](SECURITY.m
 2. It requests each profile's `codex.accountUsage` data through the local Gateway.
 3. `tools/codex-usage-cache-update` atomically writes the usage JSON cache with restricted filesystem permissions.
 4. A systemd user timer refreshes the cache every five minutes.
-5. The plugin applies independently configurable W/M lines for the verified Telegram topic. W is only possible for the authorized owner; M depends on the topic setting and actual model metadata.
+5. The plugin applies independently configurable W/M lines for the verified Telegram topic. W follows the shared topic setting, independently of sender identity; M follows the topic setting and model metadata.
 6. The owner-only `/limits` command renders a fresh PNG locally using Python/Pillow, or returns text if image delivery fails.
 
 No external metrics server, third-party telemetry, or LLM call is required for generating the usage header and `/limits` image.
