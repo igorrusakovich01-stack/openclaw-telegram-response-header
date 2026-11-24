@@ -100,7 +100,7 @@ async function incoming(h, sender, id) {
   await h.on("message_received", event, ctx);
 }
 
-test("reply_payload_sending: owner has W/M, other has M only", async () => {
+test("reply_payload_sending: W/M are shared across participants", async () => {
   const h = harness();
   await h.command("header", ownerTopicCommand("w on"));
   await incoming(h, OWNER, "r-owner");
@@ -122,8 +122,7 @@ test("reply_payload_sending: owner has W/M, other has M only", async () => {
   // The actual observed model must retain the documented update timestamp.
   assert.match(owner.payload.text, /M:\*\*openai\/demo-model\*\* upd \d{2}\.\d{2} \d{2}:\d{2}/);
   assert.match(other.payload.text, /M:\*\*openai\/demo-model\*\* upd \d{2}\.\d{2} \d{2}:\d{2}/);
-  assert.match(other.payload.text, /^M:\*\*openai\/demo-model\*\*/);
-  assert.doesNotMatch(other.payload.text, /W:/);
+  assert.match(other.payload.text, /^W:\*\*73%\*\*/);
 });
 
 test("version 6.2 is explicit for observed model and no version is invented for aliases", async () => {
@@ -148,9 +147,9 @@ test("version 6.2 is explicit for observed model and no version is invented for 
     payload: { text: "Unversioned answer" },
   }, { channelId: "telegram", sessionKey: SESSION, runId: "v-other" });
 
-  assert.match(other.payload.text, /^M:\*\*openai\/model-alias\*\* upd /);
+  assert.match(other.payload.text, /\nM:\*\*openai\/model-alias\*\* upd /);
   assert.doesNotMatch(other.payload.text, / · v\d/);
-  assert.doesNotMatch(other.payload.text, /^W:/);
+  assert.match(other.payload.text, /^W:/);
 });
 
 test("version 6.2 is explicit in native message_sending model observations", async () => {
@@ -169,7 +168,7 @@ test("version 6.2 is explicit in native message_sending model observations", asy
   assert.doesNotMatch(result.content, /^W:/);
 });
 
-test("message_sending: owner has W/M, other M-only, unknown strips old W", async () => {
+test("message_sending: W is shared, stale W is replaced even without sender metadata", async () => {
   const h = harness();
   await h.command("header", ownerTopicCommand("w on"));
   await incoming(h, OWNER, "a-owner");
@@ -188,9 +187,8 @@ test("message_sending: owner has W/M, other M-only, unknown strips old W", async
     event("W:old\nM:**openai/demo-model**\n\nUnknown answer"),
     { channelId: "telegram", sessionKey: SESSION });
   assert.match(owner.content, /^W:\*\*73%\*\*/);
-  assert.match(other.content, /^M:/);
-  assert.doesNotMatch(other.content, /W:/);
-  assert.equal(unknown.content, "M:**openai/demo-model**\n\nUnknown answer");
+  assert.match(other.content, /^W:\*\*73%\*\*/);
+  assert.equal(unknown.content, "W:**73%** [synthetic]\nM:**openai/demo-model**\n\nUnknown answer");
 });
 
 test("default W off, M on; any topic participant can change, but unknown origins cannot", async () => {
@@ -238,7 +236,7 @@ test("default W off, M on; any topic participant can change, but unknown origins
   assert.doesNotMatch(result.payload.text, /W:/);
 });
 
-test("ordinary participant may enable W, but quota is still owner-only", async () => {
+test("ordinary participant may enable W for every reply", async () => {
   const h = harness();
   const changed = await h.command("header", {
     ...ownerTopicCommand("w on", OTHER), isAuthorizedSender: false,
@@ -251,8 +249,8 @@ test("ordinary participant may enable W, but quota is still owner-only", async (
     usageState: { resolvedRef: "openai/gpt-6.2-sol" },
     payload: { text: "Member response" },
   }, { channelId: "telegram", sessionKey: SESSION, runId: "member-w" });
-  assert.match(member.payload.text, /^M:/);
-  assert.doesNotMatch(member.payload.text, /^W:/);
+  assert.match(member.payload.text, /^W:/);
+  assert.match(member.payload.text, /\nM:/);
 
   await incoming(h, OWNER, "owner-w");
   const owner = await h.on("reply_payload_sending", {
@@ -382,4 +380,35 @@ test("explicit authenticated owner /limits report retains its command header", a
     payload: { text: report },
   }, directOwner);
   assert.equal(delivery, undefined);
+});
+
+
+test("native delivery without sender or runId shares W across agents and keeps topics isolated", async () => {
+  const h = harness();
+  await h.command("header", {...ownerTopicCommand("w on", OTHER), isAuthorizedSender: false});
+  const event = { metadata: { channel: "telegram" }, to: "-100123", threadId: 17, content: "Answer" };
+  const r = await h.on("message_sending", event, { channelId: "telegram" });
+  assert.match(r.content, /^W:\*\*73%\*\*/);
+  const other = await h.on("message_sending", {...event, threadId: 18}, {channelId: "telegram"});
+  assert.doesNotMatch(other.content, /^W:/);
+  const conflict = await h.on("message_sending", {...event, threadId: 18, content: "W:old\nAnswer"}, {channelId:"telegram",sessionKey:SESSION});
+  assert.equal(conflict.content, "Answer");
+});
+test("header command replies have no stale or unknown model on either delivery path", async () => {
+  const h = harness();
+  const response = await h.command("header", ownerTopicCommand("on", OTHER));
+  await h.on("llm_input", {provider:"openai", model:"old-model", runId:"earlier"}, {sessionKey:SESSION});
+  const ctx = {channelId:"telegram", sessionKey:SESSION};
+  for (const text of [response.text, "M:**?**\n\n"+response.text, "M:**old-model**\n\n"+response.text]) {
+    const native = await h.on("message_sending", {metadata:{channel:"telegram"},content:text},ctx);
+    assert.equal(native?.content ?? text,response.text);
+    const payload = await h.on("reply_payload_sending",{channel:"telegram",kind:"final",payload:{text}},ctx);
+    assert.equal(payload?.payload.text ?? text,response.text);
+  }
+});
+test("limits command denies all group participants including owner and non-owner direct callers", async () => {
+  const h = harness();
+  for (const ctx of [ownerTopicCommand("", OWNER),ownerTopicCommand("", OTHER),{channel:"telegram",senderId:OTHER,from:"telegram:"+OTHER,sessionKey:"agent:main:telegram:direct:"+OTHER,isAuthorizedSender:true}]) {
+    assert.match((await h.command("limits",ctx)).text,/available only to the authorized owner/);
+  }
 });
