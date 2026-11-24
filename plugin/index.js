@@ -409,7 +409,18 @@ function formatTopicHeaderStatus(settings) {
     "\nCommands: /header status | w on/off | m on/off | on | off | reset";
 }
 
-async function renderTopicReplyHeader({ event, ctx, store, owner, modelLine }) {
+function isHeaderCommandReply(text) {
+  const body = stripAnswerHeader(text).trim();
+  return /^Header for this topic: W (?:on|off), M (?:on|off)\nCommands: \/header status \| w on\/off \| m on\/off \| on \| off \| reset$/u.test(body) ||
+    ["Use /header from a Telegram user inside a recognized forum topic.",
+     "Run /header inside a recognized Telegram forum topic.",
+     "Usage: /header status | w on/off | m on/off | on | off | reset",
+     "Header settings could not be read or saved. No change was confirmed.",
+     "⚠️ This command is no longer available after the plugin registry changed. Please try again.",
+     "⚠️ This command selection is no longer valid. Please try again."].includes(body);
+}
+
+async function renderTopicReplyHeader({ event, ctx, store, modelLine }) {
   const scope = topicForReply(event, ctx);
   let settings;
   if (scope) {
@@ -425,7 +436,8 @@ async function renderTopicReplyHeader({ event, ctx, store, owner, modelLine }) {
     settings = /:telegram:direct:[0-9]+$/u.test(session) ? DEFAULT_LINES : NO_LINES;
   }
   const lines = [];
-  if (owner && settings.w) lines.push(await readUsageHeader());
+  // W is a shared, opt-in topic display, not a per-sender entitlement.
+  if (scope && settings.w) lines.push(await readUsageHeader());
   if (settings.m) lines.push(modelLine());
   return lines.join("\n");
 }
@@ -539,6 +551,10 @@ export default definePluginEntry({
       if (channel !== "telegram" || typeof event.content !== "string") return;
       const content = event.content;
       if (!content.trim()) return;
+      if (isHeaderCommandReply(content)) {
+        const body = stripAnswerHeader(content).trimStart();
+        return body === content ? undefined : { content: body };
+      }
       const owner = replyAudience.isOwnerReply(event, ctx, api.pluginConfig?.ownerTelegramId);
       const authenticatedOwnerCommand = Boolean(ctx) &&
         isDirectOwnerCommand(ctx, String(api.pluginConfig?.ownerTelegramId ?? "").trim());
@@ -548,7 +564,7 @@ export default definePluginEntry({
       // Provider status/fallback notices are not model-generated answers.
       if (/^\s*↪️\s*Model Fallback/u.test(content)) return;
       const header = await renderTopicReplyHeader({
-        event, ctx, store: topicHeaderStore, owner,
+        event, ctx, store: topicHeaderStore,
         modelLine: () => {
           const observed = resolveSessionModel(ctx, event);
           return observed !== "?" ? modelLineWithVersion(observed)
@@ -611,6 +627,11 @@ export default definePluginEntry({
         return;
       }
 
+      if (isHeaderCommandReply(event.payload.text)) {
+        const body = stripAnswerHeader(event.payload.text).trimStart();
+        return body === event.payload.text ? undefined : { payload: { ...event.payload, text: body } };
+      }
+
       // Avoid prefixing stream/status lanes that are not an answer.
       if (
         event.payload.isReasoning === true ||
@@ -642,7 +663,7 @@ export default definePluginEntry({
       }
 
       const header = await renderTopicReplyHeader({
-        event, ctx, store: topicHeaderStore, owner,
+        event, ctx, store: topicHeaderStore,
         modelLine: () => {
           const model = resolveActualModel(event, runId);
           return model !== "?" ? modelLineWithVersion(model)
