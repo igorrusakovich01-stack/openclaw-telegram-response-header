@@ -1,6 +1,6 @@
 # OpenClaw Telegram Response Header
 
-**Know your limits.** Show OpenAI quota, the observed AI model, and a private `/limits` report directly in OpenClaw Telegram replies.
+Control Telegram reply headers by topic: show the observed model and optional OpenAI quota, with a private `/limits` report. The default is **M on, W off**.
 
 [![CI](https://github.com/igorrusakovich01-stack/openclaw-telegram-response-header/actions/workflows/ci.yml/badge.svg)](https://github.com/igorrusakovich01-stack/openclaw-telegram-response-header/actions/workflows/ci.yml)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -12,7 +12,7 @@
 
 ![Annotated Telegram header showing quota, progress bar, reset time, usage pace, model, and legacy update marker](docs/images/telegram-header-annotated.svg)
 
-> Annotated example with synthetic data. The `upd` field belongs to a legacy header format and is **not emitted by the current public release**.
+> Synthetic preview with W explicitly enabled. The model update timestamp is supported; the default is W off.
 
 **Private `/limits` report**
 
@@ -22,8 +22,8 @@
 
 ## Features
 
-- **W:** cached OpenAI weekly quota remaining, five-segment progress bar, next reset, and pace indicator.
-- **M:** observed model identifier, including model changes when the correlated runtime events are available. Unknown model data is displayed as `M:?`, never invented.
+- **W:** optional cached OpenAI weekly quota remaining, visible to every participant on ordinary replies when enabled in that topic (off by default).
+- **M:** observed model identifier, explicit version when present in the identifier (e.g. `gpt-6.2-sol` -> `v6.2`), and update time. It is on by default per identifiable topic; unknown versions are not invented.
 - **`/limits`:** owner-only private Telegram command for a per-subscription PNG usage report, with text fallback. It does not invoke an LLM.
 - **Multiple OpenAI OAuth profiles:** reads available profiles and shows each subscription; combines percentages only when provider plan information is comparable.
 - **Background updates:** Linux systemd user timer refreshes the local cache approximately every five minutes; cache is valid for up to ten minutes.
@@ -31,14 +31,39 @@
 
 ### Response format
 
+Default for a recognized Telegram topic (W off, M on):
+
 ```text
-W:**67%** 🟩🟩🟩⬜⬜ ~27.10 18:00 🟢
-M:**openai/gpt-6.1-sol**
+M:**openai/gpt-6.2-sol** · v6.2 upd 20.11 12:27
 
 Your bot's normal response...
 ```
 
-The example figures above are synthetic.
+The model name, version, and timestamp above are synthetic examples.
+In a topic with W enabled, every participant can see the aggregate quota on ordinary replies. **Any participant can enable W**, including in existing topics with saved W-on settings. Do not install this version in groups where aggregate quota must remain private. When both lines are off, no header is added. `/header` command responses carry no model header.
+If topic routing is ambiguous, both lines are suppressed rather than
+incorrectly applying another topic's settings. Explicitly identified
+direct-message sessions use the default (M only).
+
+### Per-topic slash commands
+
+Run these **inside the Telegram forum topic you want to configure**.
+Anyone who can send a message in the Telegram forum topic can change its W/M settings:
+
+| Command | Effect in the current topic |
+| --- | --- |
+| `/header` or `/header status` | Show W/M settings |
+| `/header w on`, `/header w off` | Toggle the quota line |
+| `/header m on`, `/header m off` | Toggle the model line |
+| `/header on`, `/header off` | Enable or disable both lines |
+| `/header reset` | Restore the default: W off, M on |
+
+These settings are keyed by Telegram group and topic, **not by agent or
+model**, so they survive model changes and Gateway restarts. They are stored
+privately at `~/.openclaw/telegram-response-header-topics.json` (mode 0600);
+no settings, group IDs, or user IDs are committed to this repository.
+The command requires a Telegram sender ID and an exact forum-topic route, but does not require OpenClaw owner authorization. Any topic participant can overwrite another participant's choices; the last valid change wins. Commands do not call an LLM. The owner-only `/limits` report is separate
+and remains available in the owner's private chat.
 
 ## Requirements
 
@@ -94,7 +119,7 @@ systemctl --user status codex-usage-cache.timer --no-pager
 
 If `reload` fails due to a stale or invalid plugin configuration, **do not run a repair command blindly**. Check `openclaw plugins doctor`, examine the exact error, and follow the version-specific instructions.
 
-Send your Telegram bot an ordinary message to see the W/M header. Use `/limits` in the owner's private chat to request a PNG report.
+Send a message in a topic to see M by default. Use `/header` in that topic to change W/M visibility, or `/limits` in the owner's private chat to request a PNG report.
 
 See [Configuration](docs/configuration.md) and [Security and privacy](SECURITY.md).
 
@@ -104,7 +129,7 @@ See [Configuration](docs/configuration.md) and [Security and privacy](SECURITY.m
 2. It requests each profile's `codex.accountUsage` data through the local Gateway.
 3. `tools/codex-usage-cache-update` atomically writes the usage JSON cache with restricted filesystem permissions.
 4. A systemd user timer refreshes the cache every five minutes.
-5. The plugin prepends the cached W line to eligible Telegram replies and correlates M with available model lifecycle events.
+5. The plugin applies independently configurable W/M lines for the verified Telegram topic. W follows the shared topic setting, independently of sender identity; M follows the topic setting and model metadata.
 6. The owner-only `/limits` command renders a fresh PNG locally using Python/Pillow, or returns text if image delivery fails.
 
 No external metrics server, third-party telemetry, or LLM call is required for generating the usage header and `/limits` image.
