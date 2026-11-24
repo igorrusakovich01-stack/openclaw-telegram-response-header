@@ -12,12 +12,7 @@ openclaw config set plugins.entries.telegram-response-header.config.ownerTelegra
 
 Replace the example ID. Use your bot's /whoami command or Telegram's own account tools to find your ID.
 
-The owner ID only protects quota visibility and private `/limits`. Any identifiable
-Telegram forum-topic participant can modify that topic's W/M settings using `/header`.
-A participant may enable W for the topic, but W is displayed only on replies
-confirmed as originating from the configured owner.
-By default W is off, M is on. The reply audience is correlated using exact
-run or message metadata; an unidentified topic suppresses both lines.
+The owner ID protects private `/limits`. Any identifiable Telegram forum-topic participant can modify that topic's W/M settings using `/header`. W is shared on ordinary replies when enabled, including previously saved W-on settings. By default W is off, M is on. Unidentified or contradictory topic routing suppresses both lines. `/header` command responses carry no model header.
 The owner ID is never stored in the repository.
 
 ## Optional
