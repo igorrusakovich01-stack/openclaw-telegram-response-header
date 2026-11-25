@@ -18,7 +18,7 @@ except ImportError:
     raise SystemExit("Pillow missing: sudo apt install python3-pil")
 
 WIDTH = 1120
-TZ = ZoneInfo("UTC")
+TZ = None  # datetime uses the OS timezone when no override is provided
 WEEK_MS = 7 * 24 * 60 * 60 * 1000
 NAVY = "#173046"
 MUTED = "#61778b"
@@ -153,14 +153,16 @@ def main():
     if len(sys.argv) not in (3, 4, 5):
         raise SystemExit("usage: render-limits-png SOURCE_JSON OUTPUT_PNG [REPORT_TITLE] [TIME_ZONE]")
     source, target = map(Path, sys.argv[1:3])
-    report_title = sys.argv[3].strip()[:64] if len(sys.argv) == 4 else "OpenAI Usage Limits"
+    report_title = sys.argv[3].strip()[:64] if len(sys.argv) >= 4 else "OpenAI Usage Limits"
     report_title = report_title or "OpenAI Usage Limits"
     global TZ
-    if len(sys.argv) == 5:
-        try:
-            TZ = ZoneInfo(sys.argv[4])
-        except (KeyError, ValueError):
-            TZ = ZoneInfo("UTC")
+    for zone in [sys.argv[4] if len(sys.argv) == 5 else None, os.getenv("OPENCLAW_USAGE_TIMEZONE")]:
+        if zone:
+            try:
+                TZ = ZoneInfo(zone)
+                break
+            except (KeyError, ValueError):
+                continue
     data = json.loads(source.read_text("utf-8"))
     rows = data.get("subscriptions") if isinstance(data.get("subscriptions"), list) else []
     errors = data.get("errors") if isinstance(data.get("errors"), list) else []
