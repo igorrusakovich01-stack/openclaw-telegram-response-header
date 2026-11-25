@@ -22,7 +22,7 @@ const SESSION = "agent:main:telegram:group:-100123:topic:17";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const source = readFileSync(path.join(root, "plugin/index.js"), "utf8");
 
-function harness() {
+function harness(options = {}) {
   // Evaluate the real plugin body against a minimal OpenClaw event mock.
   const fakeHome = mkdtempSync(path.join(os.tmpdir(), "header-delivery-test-"));
   // Never connect to a real Gateway, Telegram, files or OAuth profiles.
@@ -32,15 +32,21 @@ function harness() {
     complete: true,
     header: "W:**73%** [synthetic]",
     cacheGeneratedAt: Date.now(),
+    ...options.cache,
   });
+  const sent = [], executions = [];
   const context = {
-    process: { env: {} },
+    process: { env: options.env || {} },
     os: { homedir: () => fakeHome },
     path,
     DEFAULT_LINES, NO_LINES, createTopicHeaderStore,
     parseHeaderAction, topicForCommand, topicForReply,
     promisify,
-    execFile: (_file, _args, _opts, callback) => callback(null, "", ""),
+    execFile: (_file, args, _opts, callback) => {
+      executions.push([...args]);
+      if (options.failAnalytics && args[0].endsWith("render-limits-analytics")) callback(new Error("synthetic renderer failure"));
+      else callback(null, "", "");
+    },
     randomUUID: () => "synthetic",
     readFile: async () => fakeCache,
     mkdir: async () => {},
@@ -58,7 +64,12 @@ function harness() {
   const hooks = new Map();
   const commands = new Map();
   const api = {
-    pluginConfig: { ownerTelegramId: OWNER },
+    pluginConfig: { ownerTelegramId: OWNER, ...options.pluginConfig },
+    logger: { warn() {} },
+    runtime: { channel: { outbound: { loadAdapter: async () => ({ sendMedia: async (params) => {
+      if (options.failDelivery && params.mediaUrl.includes(options.failDelivery)) throw new Error("synthetic delivery failure");
+      sent.push(params);
+    } }) } } },
     on(name, fn) {
       assert.equal(hooks.has(name), false, "Duplicate hook: " + name);
       hooks.set(name, fn);
@@ -67,7 +78,7 @@ function harness() {
   };
   context.pluginEntry.register(api);
   return {
-    api,
+    api, sent, executions,
     on: (name, event, ctx) => {
       assert.ok(hooks.has(name), "Missing hook: " + name);
       return hooks.get(name)(event, ctx);
@@ -411,4 +422,78 @@ test("limits command denies all group participants including owner and non-owner
   for (const ctx of [ownerTopicCommand("", OWNER),ownerTopicCommand("", OTHER),{channel:"telegram",senderId:OTHER,from:"telegram:"+OTHER,sessionKey:"agent:main:telegram:direct:"+OTHER,isAuthorizedSender:true}]) {
     assert.match((await h.command("limits",ctx)).text,/available only to the authorized owner/);
   }
+});
+
+
+function directLimits(args = "", sender = OWNER) {
+  return { channel:"telegram", channelId:"telegram", senderId:sender, from:"telegram:"+sender,
+    sessionKey:"agent:main:telegram:direct:"+sender, messageThreadId:null, isAuthorizedSender:true, args, accountId:"test-account" };
+}
+
+test("limits sends all three private PNGs, using configured timezone for both renderers", async () => {
+  const h = harness({pluginConfig:{timeZone:"Asia/Tokyo"}, env:{OPENCLAW_USAGE_TIMEZONE:"UTC"},
+    cache:{header:"W:**73%** [synthetic] ~01.01 00:00 🟢", earliestResetAt:Date.UTC(2027,0,1,0,0)}});
+  assert.equal(h.commandRegistration("limits").acceptsArgs,true);
+  assert.equal((await h.command("limits",directLimits())).suppressReply,true);
+  assert.equal(h.sent.length,3);
+  assert.ok(h.sent[0].mediaUrl.endsWith("limits-synthetic.png"));
+  assert.ok(h.sent[1].mediaUrl.endsWith("limits-analytics-groups-synthetic.png"));
+  assert.ok(h.sent[2].mediaUrl.endsWith("limits-analytics-topics-synthetic.png"));
+  for (const item of h.sent) {
+    assert.equal(item.to,OWNER);
+    assert.equal(item.accountId,"test-account");
+    assert.match(item.text, /~01\.01 09:00/);
+    assert.match(item.text, /M:\*\*—\*\* \(no LLM call\)/);
+  }
+  assert.equal(h.executions.length,2);
+  assert.equal(h.executions[0].at(-1),"Asia/Tokyo");
+  assert.equal(h.executions[1].at(-1),"Asia/Tokyo");
+});
+
+test("limits modes select only the requested private image and users/help make no renderer calls", async () => {
+  for (const [mode, suffix] of [["quota","limits-synthetic.png"],["projects","limits-analytics-groups-synthetic.png"],["topics","limits-analytics-topics-synthetic.png"]]) {
+    const h = harness();
+    assert.equal((await h.command("limits",directLimits(mode))).suppressReply,true);
+    assert.equal(h.sent.length,1);
+    assert.ok(h.sent[0].mediaUrl.endsWith(suffix));
+    assert.equal(h.executions.length,1);
+  }
+  const h = harness();
+  assert.match((await h.command("limits",directLimits("users"))).text,/Individual token attribution is unavailable/);
+  assert.match((await h.command("limits",directLimits("invalid"))).text,/Usage: \/limits/);
+  assert.equal(h.executions.length,0);
+  assert.equal(h.sent.length,0);
+});
+
+test("every limits mode rejects non-owner and group callers before private rendering", async () => {
+  const h = harness();
+  for (const mode of ["","quota","projects","topics","users"]) {
+    for (const ctx of [ownerTopicCommand(mode,OWNER),ownerTopicCommand(mode,OTHER),directLimits(mode,OTHER),{...directLimits(mode),isAuthorizedSender:false}]) {
+      assert.match((await h.command("limits",ctx)).text,/available only to the authorized owner/);
+    }
+  }
+  assert.equal(h.executions.length,0);
+  assert.equal(h.sent.length,0);
+});
+
+test("quota remains delivered if analytics fails; selective media failure is reported", async () => {
+  const failed = harness({failAnalytics:true});
+  assert.match((await failed.command("limits",directLimits())).text,/Session analytics is unavailable/);
+  assert.equal(failed.sent.length,1);
+  const retry = await failed.command("limits",directLimits("topics"));
+  assert.match(retry.text,/Session analytics is unavailable/);
+  const partial = harness({failDelivery:"groups"});
+  assert.match((await partial.command("limits",directLimits())).text,/Analytics delivery failed: Groups & Projects/);
+  assert.equal(partial.sent.length,2);
+  assert.ok(partial.sent[1].mediaUrl.includes("topics"));
+});
+
+test("invalid explicit zone falls back to valid environment; W reset uses epoch", async () => {
+  const h = harness({pluginConfig:{timeZone:"invalid/zone"},env:{OPENCLAW_USAGE_TIMEZONE:"America/New_York"},
+    cache:{header:"W:**73%** [synthetic] ~01.07 12:00 🟢",earliestResetAt:Date.UTC(2027,6,1,12,0)}});
+  await h.command("header",ownerTopicCommand("w on"));
+  const r = await h.on("message_sending",{metadata:{channel:"telegram"},content:"Answer"},{channelId:"telegram",sessionKey:SESSION});
+  assert.match(r.content,/~01\.07 08:00/);
+  await h.command("limits",directLimits("quota"));
+  assert.equal(h.executions[0].at(-1),"America/New_York");
 });
