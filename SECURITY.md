@@ -22,6 +22,8 @@ it uses exact event identifiers and a bounded short-lived metadata-only map.
 Unidentified or contradictory topic routing results in no automatic header. The plugin's generated report can include
 OAuth profile email addresses, which are private account metadata.
 
+The private analytics reports query `sessions.usage` only after owner authorization. They may contain real group/topic names, identifiers and token counts. Raw responses are processed in memory; only aggregate PNGs are written with restricted permissions. Never publish actual reports or session fixtures. No per-author token attribution is attempted.
+
 ## Local data
 
 Private per-topic settings are stored in `~/.openclaw/telegram-response-header-topics.json`, written atomically with mode 0600. Any identifiable Telegram participant in a forum topic may change that topic's settings via `/header`, even without OpenClaw owner authorization. This is intentional: any participant can disable M or enable W for the topic, and W is shared across all ordinary replies in that topic. Do not commit or share the file, as it contains Telegram group/topic identifiers.

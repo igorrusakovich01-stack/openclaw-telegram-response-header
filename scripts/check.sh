@@ -7,7 +7,7 @@ bash -n install.sh uninstall.sh tools/codex-usage-cache-update scripts/check.sh
 echo "Checking plugin syntax..."
 node --check plugin/index.js
 echo "Checking Python syntax..."
-python3 -m py_compile tools/codex-usage-header tools/render-limits-png tests/test_renderer.py
+python3 -m py_compile tools/codex-usage-header tools/render-limits-png tools/render-limits-analytics tests/test_renderer.py tests/test_analytics.py
 echo "Checking JSON syntax..."
 python3 -m json.tool plugin/openclaw.plugin.json >/dev/null
 python3 -m json.tool plugin/package.json >/dev/null
@@ -22,7 +22,7 @@ for base in ("plugin", "tools", "docs", "tests", "scripts", "systemd"):
             continue
         if file.name.endswith(".svg"):
             data = file.read_text("utf-8")
-        elif file.suffix in (".json", ".md", ".js", ".mjs", ".py", ".sh", ".service", ".timer") or file.name in ("render-limits-png", "codex-usage-header", "codex-usage-cache-update"):
+        elif file.suffix in (".json", ".md", ".js", ".mjs", ".py", ".sh", ".service", ".timer") or file.name in ("render-limits-png", "render-limits-analytics", "codex-usage-header", "codex-usage-cache-update"):
             data = file.read_text("utf-8")
         else:
             continue

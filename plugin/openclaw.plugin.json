@@ -2,7 +2,7 @@
   "id": "telegram-response-header",
   "name": "Telegram Response Header",
   "description": "Per-topic configurable Telegram W/M reply lines, shared topic quota, and owner-only private /limits reports.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "activation": {
     "onStartup": true,
     "onCapabilities": [
@@ -28,7 +28,7 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 64,
-        "description": "IANA time zone for the usage report (defaults to UTC)."
+        "description": "IANA time zone for timestamps and reports; falls back to the environment, OS zone, then UTC."
       }
     }
   }

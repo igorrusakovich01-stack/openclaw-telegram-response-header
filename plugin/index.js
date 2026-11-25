@@ -24,6 +24,7 @@ const CACHE_FILE = path.join(
 
 const HEADER_TOPICS_FILE = path.join(os.homedir(), ".openclaw", "telegram-response-header-topics.json");
 const RENDERER = path.join(os.homedir(), ".openclaw", "workspace", "tools", "render-limits-png");
+const ANALYTICS_RENDERER = path.join(os.homedir(), ".openclaw", "workspace", "tools", "render-limits-analytics");
 const IMAGE_DIR = path.join(os.homedir(), ".openclaw", "workspace", ".telegram-response-header-media");
 const runFile = promisify(execFile);
 
@@ -54,7 +55,16 @@ function cleanupMaps(now = Date.now()) {
 }
 
 function configuredTimeZone(api) {
-  return String(api?.pluginConfig?.timeZone || process.env.OPENCLAW_USAGE_TIMEZONE || "UTC");
+  for (const zone of [api?.pluginConfig?.timeZone, process.env.OPENCLAW_USAGE_TIMEZONE, Intl.DateTimeFormat().resolvedOptions().timeZone, "UTC"]) {
+    if (typeof zone !== "string" || !zone.trim()) continue;
+    try {
+      new Intl.DateTimeFormat("en", { timeZone: zone.trim() });
+      return zone.trim();
+    } catch {
+      // An invalid zone must not prevent replies or reports.
+    }
+  }
+  return "UTC";
 }
 
 function formatLocalTime(date = new Date(), api) {
@@ -63,12 +73,12 @@ function formatLocalTime(date = new Date(), api) {
   try {
     parts = new Intl.DateTimeFormat("en-GB", {
       timeZone: zone, day: "2-digit", month: "2-digit",
-      hour: "2-digit", minute: "2-digit", hour12: false,
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
     }).formatToParts(date);
   } catch {
     parts = new Intl.DateTimeFormat("en-GB", {
       timeZone: "UTC", day: "2-digit", month: "2-digit",
-      hour: "2-digit", minute: "2-digit", hour12: false,
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
     }).formatToParts(date);
   }
   const fields = Object.fromEntries(
@@ -84,10 +94,10 @@ function observedModelVersion(model) {
   return found?.[1] ?? null;
 }
 
-function modelLineWithVersion(model, timestamp = true) {
+function modelLineWithVersion(model, timestamp = true, api) {
   const version = observedModelVersion(model);
   const suffix = version ? ` · v${version}` : "";
-  return `M:**${model}**${suffix}${timestamp ? ` upd ${formatLocalTime()}` : ""}`;
+  return `M:**${model}**${suffix}${timestamp ? ` upd ${formatLocalTime(new Date(), api)}` : ""}`;
 }
 
 function fallbackModelLineWithVersion(text) {
@@ -96,7 +106,15 @@ function fallbackModelLineWithVersion(text) {
   return model ? modelLineWithVersion(model, false) : line;
 }
 
-async function readUsageHeader() {
+function cachedHeaderInZone(data, api) {
+  const header = data.header.trim();
+  const stamp = Number(data.earliestResetAt);
+  const reset = Number.isFinite(stamp) && stamp > 0 && Number.isFinite(new Date(stamp).getTime())
+    ? formatLocalTime(new Date(stamp), api) : "?";
+  return header.replace(/~(?:\d{2}\.\d{2} \d{2}:\d{2}|\?)(?=\s|$)/u, "~" + reset);
+}
+
+async function readUsageHeader(api) {
   try {
     const raw = await readFile(CACHE_FILE, "utf8");
     const data = JSON.parse(raw);
@@ -112,7 +130,7 @@ async function readUsageHeader() {
       age >= -60_000 &&
       age <= CACHE_MAX_AGE_MS
     ) {
-      return data.header.trim();
+      return cachedHeaderInZone(data, api);
     }
   } catch {
     // Fail closed to unknown quota data.
@@ -157,7 +175,7 @@ async function createLimitsReport(api) {
     ageMs >= -60_000 && ageMs <= CACHE_MAX_AGE_MS;
 
   const report = [
-    data.header && fresh ? data.header.trim() :
+    data.complete === true && typeof data.header === "string" && fresh ? cachedHeaderInZone(data, api) :
       "W:**?%** ⬜⬜⬜⬜⬜ ~? ⚪",
     "M:**—** (no LLM call)",
     "",
@@ -271,7 +289,7 @@ async function deliverLimitsImage(api, ctx) {
     return { text: `⚠️ PNG rendering failed; sending a text report instead.\n\n${await createLimitsReport(api)}` };
   }
 
-  const usageLine = await readUsageHeader();
+  const usageLine = await readUsageHeader(api);
   const caption = `${usageLine}\nM:**—** (no LLM call)\n\n📊 ${reportTitle(api)} · infographic`;
 
   // Same channel adapter path as the built-in device-pair QR command.
@@ -299,6 +317,84 @@ async function deliverLimitsImage(api, ctx) {
   }
   // SDK fallback when the adapter has no direct media sender.
   return { text: caption, mediaUrl: file };
+}
+
+async function makeAnalyticsImages(api) {
+  await mkdir(IMAGE_DIR, { recursive: true, mode: 0o700 });
+  try {
+    for (const entry of await readdir(IMAGE_DIR, { withFileTypes: true })) {
+      if (!entry.isFile() || !/^limits-analytics-(?:groups|topics)-[a-f0-9-]{36}\.png$/u.test(entry.name)) continue;
+      const existing = path.join(IMAGE_DIR, entry.name);
+      if (Date.now() - (await stat(existing)).mtimeMs > 24 * 60 * 60 * 1000) await unlink(existing);
+    }
+  } catch {
+    // Cleanup is best effort.
+  }
+  const id = randomUUID();
+  const groups = path.join(IMAGE_DIR, "limits-analytics-groups-" + id + ".png");
+  const topics = path.join(IMAGE_DIR, "limits-analytics-topics-" + id + ".png");
+  await runFile("python3", [ANALYTICS_RENDERER, groups, topics, "--timezone", configuredTimeZone(api)], {
+    timeout: 95_000,
+    maxBuffer: 64 * 1024,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  return { groups, topics };
+}
+
+const LIMITS_HELP = "Usage: /limits | /limits quota | /limits projects | /limits topics | /limits users";
+const LIMITS_USERS = "Individual token attribution is unavailable for authors sharing one topic history. Use /limits projects or /limits topics for aggregate usage.";
+let analyticsInProgress = false;
+
+async function deliverLimitsWithAnalytics(api, ctx, mode) {
+  if (mode === "users") return { text: LIMITS_USERS };
+  if (mode === "quota") return deliverLimitsImage(api, ctx);
+  if (analyticsInProgress) return { text: "Usage analytics is already running. Try again shortly." };
+  analyticsInProgress = true;
+  try {
+    const original = mode === "all" ? await deliverLimitsImage(api, ctx) : null;
+    // Preserve the quota fallback when direct media delivery is unavailable.
+    if (original && original.suppressReply !== true) return original;
+    const to = ownerChatId(ctx);
+    if (!to) return { text: "Private report destination is unavailable." };
+    let adapter;
+    try {
+      adapter = await api.runtime.channel.outbound.loadAdapter("telegram");
+      if (!adapter?.sendMedia) return { text: "Analytics media delivery is unavailable." };
+    } catch {
+      return { text: "Analytics media delivery is unavailable." };
+    }
+    let images;
+    try {
+      images = await makeAnalyticsImages(api);
+    } catch {
+      // Do not log subprocess output: it may include private session data.
+      api.logger?.warn?.("limits analytics unavailable");
+      return { text: "Session analytics is unavailable. Try /limits projects or /limits topics later." };
+    }
+    const chosen = mode === "projects" ? [["groups", "Groups & Projects"]]
+      : mode === "topics" ? [["topics", "Topics & Trends"]]
+      : [["groups", "Groups & Projects"], ["topics", "Topics & Trends"]];
+    const commandHeader = (await readUsageHeader(api)) + "\nM:**—** (no LLM call)\n\n";
+    const failed = [];
+    for (const [which, title] of chosen) {
+      try {
+        await adapter.sendMedia({
+          cfg: api.config,
+          to,
+          text: commandHeader + "📊 " + title + " · today and retained history. Partial data is marked.",
+          mediaUrl: images[which],
+          mediaLocalRoots: [IMAGE_DIR],
+          ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
+        });
+      } catch {
+        failed.push(title);
+      }
+    }
+    if (failed.length) return { text: "Analytics delivery failed: " + failed.join(", ") + ". Try again later." };
+    return { suppressReply: true };
+  } finally {
+    analyticsInProgress = false;
+  }
 }
 
 function isDirectOwnerCommand(ctx, ownerTelegramId) {
@@ -417,10 +513,15 @@ function isHeaderCommandReply(text) {
      "Usage: /header status | w on/off | m on/off | on | off | reset",
      "Header settings could not be read or saved. No change was confirmed.",
      "⚠️ This command is no longer available after the plugin registry changed. Please try again.",
-     "⚠️ This command selection is no longer valid. Please try again."].includes(body);
+     "⚠️ This command selection is no longer valid. Please try again.",
+     LIMITS_HELP, LIMITS_USERS, "Usage analytics is already running. Try again shortly.",
+     "Private report destination is unavailable.", "Analytics media delivery is unavailable.",
+     "Session analytics is unavailable. Try /limits projects or /limits topics later.",
+     "⛔ /limits is available only to the authorized owner in a private chat. Configure ownerTelegramId."].includes(body) ||
+    /^Analytics delivery failed: (?:Groups & Projects|Topics & Trends)(?:, Topics & Trends)?\. Try again later\.$/u.test(body);
 }
 
-async function renderTopicReplyHeader({ event, ctx, store, modelLine }) {
+async function renderTopicReplyHeader({ api, event, ctx, store, modelLine }) {
   const scope = topicForReply(event, ctx);
   let settings;
   if (scope) {
@@ -437,7 +538,7 @@ async function renderTopicReplyHeader({ event, ctx, store, modelLine }) {
   }
   const lines = [];
   // W is a shared, opt-in topic display, not a per-sender entitlement.
-  if (scope && settings.w) lines.push(await readUsageHeader());
+  if (scope && settings.w) lines.push(await readUsageHeader(api));
   if (settings.m) lines.push(modelLine());
   return lines.join("\n");
 }
@@ -457,16 +558,18 @@ export default definePluginEntry({
 
     api.registerCommand({
       name: "limits",
-      description: "OpenAI usage limits and subscriptions",
+      description: "Private OpenAI quota and session usage reports",
       channels: ["telegram"],
       requireAuth: true,
-      acceptsArgs: false,
+      acceptsArgs: true,
       handler: async (ctx) => {
         const ownerTelegramId = String(api.pluginConfig?.ownerTelegramId ?? "").trim();
         if (!isDirectOwnerCommand(ctx, ownerTelegramId)) {
           return { text: "⛔ /limits is available only to the authorized owner in a private chat. Configure ownerTelegramId." };
         }
-        return await deliverLimitsImage(api, ctx);
+        const mode = String(ctx.args ?? "").trim().toLowerCase() || "all";
+        if (!["all", "quota", "projects", "topics", "users"].includes(mode)) return { text: LIMITS_HELP };
+        return await deliverLimitsWithAnalytics(api, ctx, mode);
       },
     });
 
@@ -564,10 +667,10 @@ export default definePluginEntry({
       // Provider status/fallback notices are not model-generated answers.
       if (/^\s*↪️\s*Model Fallback/u.test(content)) return;
       const header = await renderTopicReplyHeader({
-        event, ctx, store: topicHeaderStore,
+        api, event, ctx, store: topicHeaderStore,
         modelLine: () => {
           const observed = resolveSessionModel(ctx, event);
-          return observed !== "?" ? modelLineWithVersion(observed)
+          return observed !== "?" ? modelLineWithVersion(observed, true, api)
             : fallbackModelLineWithVersion(content);
         },
       });
@@ -663,10 +766,10 @@ export default definePluginEntry({
       }
 
       const header = await renderTopicReplyHeader({
-        event, ctx, store: topicHeaderStore,
+        api, event, ctx, store: topicHeaderStore,
         modelLine: () => {
           const model = resolveActualModel(event, runId);
-          return model !== "?" ? modelLineWithVersion(model)
+          return model !== "?" ? modelLineWithVersion(model, true, api)
             : fallbackModelLineWithVersion(event.payload.text);
         },
       });

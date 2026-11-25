@@ -2,7 +2,7 @@
 set -euo pipefail
 
 AGENT_ID=""
-TIMEZONE="${OPENCLAW_USAGE_TIMEZONE:-UTC}"
+TIMEZONE="${OPENCLAW_USAGE_TIMEZONE:-}"
 RESTART=0
 
 usage() {
@@ -52,6 +52,15 @@ OPENCLAW_BIN_DIR="$(dirname "$OPENCLAW_BIN")"
 NODE_BIN="$(command -v node)"
 NODE_BIN_DIR="$(dirname "$NODE_BIN")"
 
+if [[ -z "$TIMEZONE" ]]; then
+  TIMEZONE="$(node -p 'Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"')"
+fi
+python3 - "$TIMEZONE" <<'PY'
+import sys
+from zoneinfo import ZoneInfo
+ZoneInfo(sys.argv[1])
+PY
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="$HOME/.openclaw/workspace"
 TOOLS_DST="$WORKSPACE/tools"
@@ -88,6 +97,7 @@ backup_if_exists() {
 backup_if_exists "$TOOLS_DST/codex-usage-header"
 backup_if_exists "$TOOLS_DST/codex-usage-cache-update"
 backup_if_exists "$TOOLS_DST/render-limits-png"
+backup_if_exists "$TOOLS_DST/render-limits-analytics"
 backup_if_exists "$SYSTEMD_DST/codex-usage-cache.service"
 backup_if_exists "$SYSTEMD_DST/codex-usage-cache.timer"
 
@@ -95,6 +105,7 @@ install -m 0755 "$ROOT/tools/codex-usage-header"   "$TOOLS_DST/codex-usage-heade
 
 install -m 0755 "$ROOT/tools/codex-usage-cache-update"   "$TOOLS_DST/codex-usage-cache-update"
 install -m 0755 "$ROOT/tools/render-limits-png" "$TOOLS_DST/render-limits-png"
+install -m 0755 "$ROOT/tools/render-limits-analytics" "$TOOLS_DST/render-limits-analytics"
 
 if ! python3 -c 'from PIL import Image, ImageDraw, ImageFont' >/dev/null 2>&1; then
   echo "WARNING: Pillow is missing; PNG reports need: sudo apt install python3-pil" >&2
