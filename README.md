@@ -24,7 +24,7 @@ Control Telegram reply headers by topic: show the observed model and optional Op
 
 - **W:** optional cached OpenAI weekly quota remaining, visible to every participant on ordinary replies when enabled in that topic (off by default).
 - **M:** observed model identifier, explicit version when present in the identifier (e.g. `gpt-6.2-sol` -> `v6.2`), and update time. It is on by default per identifiable topic; unknown versions are not invented.
-- **`/limits`:** owner-only private Telegram command for a per-subscription PNG usage report, with text fallback. It does not invoke an LLM.
+- **`/limits`:** owner-only private Telegram command for three PNG reports: subscription quota, groups/projects, and topics/trends. Quota has a text fallback. It does not invoke an LLM.
 - **Multiple OpenAI OAuth profiles:** reads available profiles and shows each subscription; combines percentages only when provider plan information is comparable.
 - **Background updates:** Linux systemd user timer refreshes the local cache approximately every five minutes; cache is valid for up to ten minutes.
 - **No alerts or unsolicited notifications.** The plugin adds information to existing bot responses.
@@ -65,6 +65,14 @@ no settings, group IDs, or user IDs are committed to this repository.
 The command requires a Telegram sender ID and an exact forum-topic route, but does not require OpenClaw owner authorization. Any topic participant can overwrite another participant's choices; the last valid change wins. Commands do not call an LLM. The owner-only `/limits` report is separate
 and remains available in the owner's private chat.
 
+### Private usage reports
+
+- `/limits` sends all three images; `/limits quota` sends the subscription report only.
+- `/limits projects` and `/limits topics` send their individual charts.
+- `/limits users` explains why shared topic histories cannot provide exact per-author attribution.
+
+Analytics uses read-only `sessions.usage` for all agents, with two bounded requests (today and retained history since 2020). Rankings cover Telegram forum groups/topics; aggregate totals and daily trends include all sessions. The API limit is 1,000 session rows; capped or incomplete data is marked. These token counts are not OAuth quota or monetary costs. Analytics availability depends on the Gateway RPC and its usage cache.
+
 ## Requirements
 
 - A working OpenClaw Gateway with Telegram enabled.
@@ -83,10 +91,10 @@ On the same Linux account that runs your OpenClaw Gateway:
 ```bash
 git clone https://github.com/igorrusakovich01-stack/openclaw-telegram-response-header.git
 cd openclaw-telegram-response-header
-bash ./install.sh --agent main --timezone UTC
+bash ./install.sh --agent main
 ```
 
-Change `main` to your quota-bearing agent and `UTC` to your IANA time zone. The installer copies the plugin and helper scripts, enables the systemd user timer, and refreshes the quota cache. It **does not automatically restart** the Gateway or overwrite OAuth credentials. It keeps a backup of an existing installed plugin directory.
+Change `main` to your quota-bearing agent. The installer detects the OS time zone; use `--timezone` with an IANA name to override the collector. The installer copies the plugin and helper scripts, enables the systemd user timer, and refreshes the quota cache. It **does not automatically restart** the Gateway or overwrite OAuth credentials. It keeps a backup of an existing installed plugin directory.
 
 Then set the private `/limits` owner (replace the example numeric ID):
 
@@ -102,11 +110,11 @@ openclaw config set plugins.entries.telegram-response-header.hooks.allowConversa
 
 **Security note:** enabling `allowConversationAccess` grants the plugin the ability to receive conversation-bearing lifecycle events. This implementation uses only session and model metadata, but you should review the source before granting that permission. Without it, the fallback path may display `M:?`.
 
-Optional settings:
+Optional settings (replace the example zone as needed; omit it to use the OS zone):
 
 ```bash
 openclaw config set plugins.entries.telegram-response-header.config.reportTitle '"OpenAI Usage Limits"' --strict-json
-openclaw config set plugins.entries.telegram-response-header.config.timeZone '"UTC"' --strict-json
+openclaw config set plugins.entries.telegram-response-header.config.timeZone '"America/New_York"' --strict-json
 ```
 
 Apply the configuration and verify:
@@ -119,7 +127,7 @@ systemctl --user status codex-usage-cache.timer --no-pager
 
 If `reload` fails due to a stale or invalid plugin configuration, **do not run a repair command blindly**. Check `openclaw plugins doctor`, examine the exact error, and follow the version-specific instructions.
 
-Send a message in a topic to see M by default. Use `/header` in that topic to change W/M visibility, or `/limits` in the owner's private chat to request a PNG report.
+Send a message in a topic to see M by default. Use `/header` in that topic to change W/M visibility, or `/limits` in the owner's private chat to request three PNG reports.
 
 See [Configuration](docs/configuration.md) and [Security and privacy](SECURITY.md).
 
@@ -130,7 +138,7 @@ See [Configuration](docs/configuration.md) and [Security and privacy](SECURITY.m
 3. `tools/codex-usage-cache-update` atomically writes the usage JSON cache with restricted filesystem permissions.
 4. A systemd user timer refreshes the cache every five minutes.
 5. The plugin applies independently configurable W/M lines for the verified Telegram topic. W follows the shared topic setting, independently of sender identity; M follows the topic setting and model metadata.
-6. The owner-only `/limits` command renders a fresh PNG locally using Python/Pillow, or returns text if image delivery fails.
+6. The owner-only `/limits` command renders quota and aggregate session analytics locally using Python/Pillow. A quota rendering failure falls back to text; an analytics failure is reported without claiming success.
 
 No external metrics server, third-party telemetry, or LLM call is required for generating the usage header and `/limits` image.
 
