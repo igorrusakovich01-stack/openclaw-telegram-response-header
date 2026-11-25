@@ -3,7 +3,7 @@
 ## Required
 
 1. Install OpenClaw with Telegram enabled and an OpenAI OAuth profile.
-2. Install this plugin with `./install.sh --agent main --timezone UTC` (adjust to your agent).
+2. Install this plugin with `./install.sh --agent main` (adjust to your agent).
 3. Set the numeric Telegram owner ID used for /limits. Keep the actual value off Git:
 
 ```bash
@@ -19,11 +19,10 @@ The owner ID is never stored in the repository.
 
 ```bash
 openclaw config set plugins.entries.telegram-response-header.config.reportTitle '"OpenAI Usage Limits"' --strict-json
-openclaw config set plugins.entries.telegram-response-header.config.timeZone '"UTC"' --strict-json
+openclaw config set plugins.entries.telegram-response-header.config.timeZone '"America/New_York"' --strict-json
 ```
 
-The systemd usage collector uses the time zone passed to `install.sh --timezone`.
-Set the plugin `timeZone` to the same IANA name for report consistency.
+The plugin uses a valid explicit `timeZone`, then the legacy `OPENCLAW_USAGE_TIMEZONE` environment variable, then the OS zone, then UTC. All three reports and displayed W/M timestamps use the same resolved zone; cached reset times are reformatted from epoch milliseconds. The installer detects the OS zone for its collector; `--timezone` overrides that choice. Use the same zone for any separate collector consumers.
 
 ## Actual model in native Telegram delivery
 
