@@ -168,7 +168,7 @@ def main():
     errors = data.get("errors") if isinstance(data.get("errors"), list) else []
     now = int(datetime.now(TZ).timestamp() * 1000)
     gen = num(data.get("cacheGeneratedAt"))
-    fresh = gen is not None and -60000 <= now - gen <= 600000
+    fresh = gen is not None and -60000 <= now - gen <= 1800000
     n = min(len(rows), 8)
     account_height = 346
     account_gap = 24
