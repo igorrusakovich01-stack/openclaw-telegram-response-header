@@ -28,7 +28,7 @@ const ANALYTICS_RENDERER = path.join(os.homedir(), ".openclaw", "workspace", "to
 const IMAGE_DIR = path.join(os.homedir(), ".openclaw", "workspace", ".telegram-response-header-media");
 const runFile = promisify(execFile);
 
-const CACHE_MAX_AGE_MS = 10 * 60 * 1000;
+const CACHE_MAX_AGE_MS = 30 * 60 * 1000;
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const RUN_RETENTION_MS = 30 * 60 * 1000;
 
