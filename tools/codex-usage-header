@@ -57,71 +57,35 @@ def resolve_agent():
     )
 
 
-def find_openai_profiles(obj):
-    found = set()
-
-    def walk(x):
-        if isinstance(x, dict):
-            for k, v in x.items():
-                if k in ("id", "profileId", "profile_id") and isinstance(v, str):
-                    if PROFILE_RE.fullmatch(v):
-                        found.add(v)
-                walk(v)
-
-        elif isinstance(x, list):
-            for v in x:
-                walk(v)
-
-        elif isinstance(x, str):
-            if PROFILE_RE.fullmatch(x):
-                found.add(x)
-
-    walk(obj)
-    return sorted(found)
-
-
 def get_profiles(agent):
+    # Read published Gateway metadata, never the offline credential store.
     data = run_json([
-        "openclaw",
-        "models",
-        "auth",
-        "list",
-        "--provider", "openai",
-        "--agent", agent,
-        "--json",
-    ])
-
-    # Current OpenClaw: retain a profile's real account email separately
-    # from its OAuth profile id/alias, e.g. openai:backup.
-    if isinstance(data, dict) and isinstance(data.get("profiles"), list):
-        profiles = {}
-        for profile in data["profiles"]:
-            if not isinstance(profile, dict):
+        "openclaw", "gateway", "call", "models.authStatus",
+        "--params", json.dumps({"agentId": agent}),
+        "--json", "--timeout", "30000",
+    ], timeout=40)
+    if not isinstance(data, dict) or not isinstance(data.get("providers"), list):
+        raise RuntimeError("invalid models.authStatus response")
+    profiles = {}
+    for provider in data["providers"]:
+        if not isinstance(provider, dict) or provider.get("provider") != "openai":
+            continue
+        rows = provider.get("profiles")
+        if not isinstance(rows, list):
+            raise RuntimeError("invalid OpenAI profiles")
+        for profile in rows:
+            if not isinstance(profile, dict) or profile.get("type") != "oauth":
                 continue
-            profile_id = profile.get("id")
-            provider = profile.get("provider")
-            if (
-                provider == "openai"
-                and isinstance(profile_id, str)
-                and profile_id.startswith("openai:")
-                and not any(ch.isspace() for ch in profile_id)
-            ):
-                email = profile.get("email")
-                if (
-                    isinstance(email, str)
-                    and "@" in email
-                    and len(email) <= 320
-                    and not any(ch.isspace() for ch in email)
-                ):
-                    profiles[profile_id] = email
-                else:
-                    profiles[profile_id] = None
-
-        if profiles:
-            return dict(sorted(profiles.items()))
-
-    # Compatibility fallback for older/different JSON shapes.
-    return {profile_id: None for profile_id in find_openai_profiles(data)}
+            profile_id = profile.get("profileId")
+            if not isinstance(profile_id, str) or not PROFILE_RE.fullmatch(profile_id):
+                raise RuntimeError("invalid OpenAI OAuth profile identity")
+            email = profile.get("email")
+            profiles[profile_id] = (
+                email if isinstance(email, str) and "@" in email
+                and len(email) <= 320 and not any(ch.isspace() for ch in email)
+                else None
+            )
+    return dict(sorted(profiles.items()))
 
 
 def get_usage(agent, profile_id):
@@ -245,7 +209,7 @@ if agent:
     except Exception as e:
         profiles = {}
         result["errors"].append({
-            "stage": "auth-list",
+            "stage": "auth-status",
             "error": str(e),
         })
 else:
@@ -269,6 +233,10 @@ result["configuredCount"] = len(profiles)
 
 if len(rows) == 0:
     result["reason"] = "no usable subscriptions"
+    result["header"] = "W:**?%** ⬜⬜⬜⬜⬜ ~? ⚪"
+
+elif result["errors"] or len(rows) != len(profiles):
+    result["reason"] = "incomplete subscription snapshot"
     result["header"] = "W:**?%** ⬜⬜⬜⬜⬜ ~? ⚪"
 
 elif len(rows) == 1:
